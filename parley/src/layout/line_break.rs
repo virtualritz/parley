@@ -2055,8 +2055,9 @@ fn hanging_whitespace<B: Brush>(
 
 /// The inline box of `glyphs` of style `style_index`: the box of their run's shaped font (which
 /// may be a fallback font and differ from the style's first available font) expanded to their
-/// line height. Each of the run's atoms adds it to a line's extents, for each style of the atom's
-/// characters.
+/// line height, with the leading distributed by the style's
+/// [`LeadingDistribution`](crate::LeadingDistribution). Each of the run's atoms adds it to a
+/// line's extents, for each style of the atom's characters.
 ///
 /// Per [CSS Inline 3 § 4.1], glyphs from fonts other than the first available font only
 /// contribute to the line when the `line-height` is `normal` ([`LineHeight::MetricsRelative`]);
@@ -2071,10 +2072,12 @@ fn run_box_metrics<B: Brush>(
     glyphs: RunGlyphs,
     style_index: u16,
 ) -> Option<BoxMetrics> {
-    match data.styles[usize::from(style_index)].line_height {
+    let style = &data.styles[usize::from(style_index)];
+    match style.line_height {
         LineHeight::MetricsRelative(_) => Some(BoxMetrics::from_font(
             &data.shaped_text.runs()[glyphs.run_idx].font_metrics,
             glyphs.line_height,
+            style.leading_distribution,
             data.quantize,
         )),
         LineHeight::FontSizeRelative(_) | LineHeight::Absolute(_) => None,

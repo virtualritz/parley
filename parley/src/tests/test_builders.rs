@@ -15,8 +15,9 @@ use super::utils::{
 };
 use crate::{
     BaseDirection, BreakReason, FontContext, FontFamily, FontFeatures, FontVariations, Layout,
-    LayoutContext, LineHeight, OverflowWrap, RangedBuilder, StyleProperty, StyleRunBuilder,
-    TextStyle, TextWrapMode, TreeBuilder, VerticalAlign, WhiteSpaceCollapse, WordBreak,
+    LayoutContext, LeadingDistribution, LineHeight, OverflowWrap, RangedBuilder, StyleProperty,
+    StyleRunBuilder, TextStyle, TextWrapMode, TreeBuilder, VerticalAlign, WhiteSpaceCollapse,
+    WordBreak,
 };
 
 /// Set of options for [`build_layout_with_ranged`].
@@ -225,6 +226,7 @@ fn create_root_style() -> TextStyle<'static, 'static, ColorBrush> {
         strikethrough_size: Some(1.7),
         strikethrough_brush: Some(ColorBrush::new(palette::css::BEIGE)),
         line_height: LineHeight::Absolute(30.),
+        leading_distribution: LeadingDistribution::Proportional,
         // Parent-relative, so it compounds through nested tree spans but not through ranged
         // styles; keep it at the default so both builders agree.
         vertical_align: VerticalAlign::BASELINE,
@@ -263,6 +265,7 @@ fn set_root_style(rb: &mut RangedBuilder<'_, ColorBrush>) {
         palette::css::BEIGE,
     ))));
     rb.push_default(LineHeight::Absolute(30.));
+    rb.push_default(LeadingDistribution::Proportional);
     rb.push_default(VerticalAlign::BASELINE);
     rb.push_default(StyleProperty::WordSpacing(2.));
     rb.push_default(StyleProperty::LetterSpacing(1.5));
