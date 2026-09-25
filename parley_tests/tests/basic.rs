@@ -1101,6 +1101,7 @@ fn realign_all() {
             None,
             AlignmentOptions {
                 align_when_overflowing: true,
+                ..AlignmentOptions::default()
             },
             "none",
             "awo_true",
@@ -1109,6 +1110,7 @@ fn realign_all() {
             None,
             AlignmentOptions {
                 align_when_overflowing: false,
+                ..AlignmentOptions::default()
             },
             "none",
             "awo_false",
