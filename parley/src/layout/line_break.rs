@@ -548,10 +548,7 @@ impl LineBoxMetrics {
     }
 
     /// The part of [`Self::add_text`] for text whose boxes may not be on the line yet.
-    ///
-    /// This is kept out of line, so that the common case of [`Self::add_text`] stays small enough
-    /// to inline into the line breaking loop.
-    #[inline(never)]
+    #[inline]
     fn add_new_text<B: Brush>(
         &mut self,
         item_idx: usize,
@@ -874,8 +871,13 @@ impl BreakerState {
             glyphs,
             &mut self.buffers,
         );
-        // Most atoms are a single character.
-        if characters.len() > 1 {
+        // Most atoms are a single character, and most atoms of several characters (such as a base
+        // letter with its marks) have a single style.
+        let first_style_index = characters[0].style_index;
+        if characters[1..]
+            .iter()
+            .any(|character| character.style_index != first_style_index)
+        {
             self.add_atom_style_changes(characters, data, glyphs);
         }
         self.update_max_height_exceeded();
