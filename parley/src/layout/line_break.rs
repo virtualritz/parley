@@ -116,7 +116,7 @@ impl LineState {
 /// See <https://www.w3.org/TR/CSS22/visudet.html#line-height>.
 ///
 /// [aligned subtree]: crate::layout::style_metrics#aligned-subtrees
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct LineBoxMetrics {
     /// Extents of each aligned subtree with content on this line. The first entry is always the
     /// root subtree (root style index `0`).
@@ -340,6 +340,21 @@ impl SubtreeExtents {
             extents.add(0., tallest.over, tallest.under);
         }
         extents
+    }
+}
+
+impl Clone for LineBoxMetrics {
+    /// The line state is copied at every line-breaking opportunity. The aligned subtrees are
+    /// `Copy`, so copy them as a slice rather than cloning them one by one.
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            subtrees: SmallVec::from_slice(&self.subtrees),
+            line_relative_top_height: self.line_relative_top_height,
+            line_relative_bottom_height: self.line_relative_bottom_height,
+            has_content: self.has_content,
+            last_text: self.last_text,
+        }
     }
 }
 
