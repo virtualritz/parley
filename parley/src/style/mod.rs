@@ -110,13 +110,16 @@ impl LineHeight {
 /// between the span's resolved [`LineHeight`] and the ascent plus descent of its font.
 ///
 /// Each span's line-height expanded box is aligned on the baseline with the other boxes on its
-/// line, and the line box is their union, whichever distribution is used. With
+/// line. By default ([`LineBoxSizing::Union`](crate::LineBoxSizing::Union)) the line box is their
+/// union, whichever distribution is used. With
 /// [`HalfLeading`](Self::HalfLeading), a smaller font with a relatively larger line height can
 /// reach further below the baseline than a larger font's box, making the line taller than any of
 /// its line heights. With [`Proportional`](Self::Proportional), every box of one font extends the
 /// same fraction of its line height above the baseline, so spans in one font make a line exactly
 /// as tall as the largest of their line heights, whatever their font sizes. Spans in fonts with
-/// different ascent to descent ratios can still make it taller.
+/// different ascent to descent ratios can still make it taller;
+/// [`LineBoxSizing::LargestLineHeight`](crate::LineBoxSizing::LargestLineHeight) sizes each line
+/// by its largest line height alone.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum LeadingDistribution {
     /// Half of the leading above the text and half below it: CSS half-leading (CSS 2 § 10.8.1).

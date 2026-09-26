@@ -1,7 +1,7 @@
 // Copyright 2026 the Parley Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Tests for [`LeadingDistribution`].
+//! Tests for [`LeadingDistribution`] and [`LineBoxSizing`].
 
 use alloc::borrow::Cow;
 use alloc::format;
@@ -14,8 +14,9 @@ use super::utils::ColorBrush;
 use super::utils::fonts::{FONT_FAMILY_LIST, create_font_context};
 use crate::layout::style_metrics::BoxMetrics;
 use crate::{
-    FontFamily, FontFamilyName, Layout, LayoutContext, LeadingDistribution, Line, LineHeight,
-    PositionedLayoutItem, StyleProperty,
+    FontFamily, FontFamilyName, InlineBox, InlineBoxKind, Layout, LayoutContext,
+    LeadingDistribution, Line, LineBoxSizing, LineHeight, PositionedLayoutItem, StyleProperty,
+    VerticalAlign,
 };
 
 const EPSILON: f32 = 1e-4;
@@ -99,6 +100,15 @@ impl Span {
             line_height: LineHeight::Absolute(line_height),
         }
     }
+
+    fn new(range: Range<usize>, family: &'static str, font_size: f32, line_height: f32) -> Self {
+        Self {
+            range,
+            family,
+            font_size,
+            line_height: LineHeight::Absolute(line_height),
+        }
+    }
 }
 
 /// Lays out `text` without quantization, with a root style of `root` line height and the leading
@@ -108,6 +118,18 @@ fn layout(
     root: LineHeight,
     distribution: LeadingDistribution,
     spans: &[Span],
+) -> Layout<ColorBrush> {
+    layout_sized(text, root, distribution, LineBoxSizing::Union, spans, None)
+}
+
+/// Like [`layout`], with the line boxes sized by `sizing`, and `inline_box` if any.
+fn layout_sized(
+    text: &str,
+    root: LineHeight,
+    distribution: LeadingDistribution,
+    sizing: LineBoxSizing,
+    spans: &[Span],
+    inline_box: Option<InlineBox>,
 ) -> Layout<ColorBrush> {
     let mut fcx = create_font_context();
     let mut lcx: LayoutContext<ColorBrush> = LayoutContext::new();
@@ -123,7 +145,11 @@ fn layout(
         builder.push(StyleProperty::FontSize(span.font_size), span.range.clone());
         builder.push(span.line_height, span.range.clone());
     }
+    if let Some(inline_box) = inline_box {
+        builder.push_inline_box(inline_box);
+    }
     let mut layout = builder.build(text);
+    layout.set_line_box_sizing(sizing);
     layout.break_all_lines(None);
     layout
 }
@@ -359,4 +385,306 @@ fn leading_distribution_is_per_style() {
     let over = 25.2 * above_fraction(&large);
     let under = small.descent + (24. - (small.ascent + small.descent)) / 2.;
     assert!((line.metrics().line_height - (over + under)).abs() < EPSILON);
+}
+
+/// The line height and the baseline below the top of each line.
+fn heights_and_baselines(layout: &Layout<ColorBrush>) -> Vec<(f32, f32)> {
+    layout
+        .lines()
+        .map(|line| (line.metrics().line_height, baseline_from_top(&line)))
+        .collect()
+}
+
+/// Three spans in three fonts with line heights 23, 11 and 25 make a line of 25, where their union
+/// is taller: Noto Kufi Arabic puts less of its line height above the baseline than Arimo does,
+/// so its box reaches further below. The baseline is where the 25 span, in Arimo, puts it.
+#[test]
+fn largest_line_height_of_three_fonts() {
+    let text = "arabic مرحبا roboto arimo";
+    let arabic = 0..17;
+    let roboto = 17..24;
+    let arimo = 24..text.len();
+    let spans = [
+        Span::new(arabic, "Noto Kufi Arabic", 20., 23.),
+        Span::new(roboto, "Roboto", 30., 11.),
+        Span::new(arimo, "Arimo", 16., 25.),
+    ];
+    let sized = |sizing| {
+        layout_sized(
+            text,
+            LineHeight::Absolute(0.),
+            LeadingDistribution::Proportional,
+            sizing,
+            &spans,
+            None,
+        )
+    };
+
+    let strict = sized(LineBoxSizing::LargestLineHeight);
+    assert_eq!(strict.len(), 1);
+    let line = strict.get(0).unwrap();
+    let fonts = run_fonts(&line);
+    let arimo_font = fonts[fonts.len() - 1];
+    let (height, baseline) = heights_and_baselines(&strict)[0];
+    assert!((height - 25.).abs() < EPSILON, "line height {height}");
+    assert!((strict.height() - 25.).abs() < EPSILON);
+    assert!(
+        (baseline - 25. * above_fraction(&arimo_font)).abs() < EPSILON,
+        "baseline {baseline}"
+    );
+    assert_glyphs_on_the_baseline(&line);
+
+    // The union of the same boxes is taller.
+    let union = sized(LineBoxSizing::Union);
+    let (union_height, union_baseline) = heights_and_baselines(&union)[0];
+    assert!(union_height > 27., "union line height {union_height}");
+    assert!((union_baseline - baseline).abs() < EPSILON);
+}
+
+/// With spans in one font, every box is proportional to its line height, so the union is the
+/// tallest box: both sizings give the same line heights and baselines.
+#[test]
+fn largest_line_height_of_one_font_matches_the_proportional_union() {
+    for (first, second) in [
+        ((21., 25.2), (13., 24.)),
+        ((13., 15.6), (21., 25.2)),
+        ((13., 30.), (21., 25.2)),
+    ] {
+        let text = "first second\nthird";
+        let spans = [
+            Span::roboto(0..6, first.0, first.1),
+            Span::roboto(6..13, second.0, second.1),
+            Span::roboto(13..text.len(), 10., 12.),
+        ];
+        let sized = |sizing| {
+            heights_and_baselines(&layout_sized(
+                text,
+                LineHeight::Absolute(0.),
+                LeadingDistribution::Proportional,
+                sizing,
+                &spans,
+                None,
+            ))
+        };
+        let strict = sized(LineBoxSizing::LargestLineHeight);
+        let union = sized(LineBoxSizing::Union);
+        assert_eq!(strict.len(), 2);
+        for ((strict_height, strict_baseline), (union_height, union_baseline)) in
+            strict.iter().zip(&union)
+        {
+            assert!(
+                (strict_height - union_height).abs() < EPSILON,
+                "{strict:?} {union:?}"
+            );
+            assert!(
+                (strict_baseline - union_baseline).abs() < EPSILON,
+                "{strict:?} {union:?}"
+            );
+        }
+        let expected = f32::max(first.1, second.1);
+        assert!((strict[0].0 - expected).abs() < EPSILON, "{strict:?}");
+        assert!((strict[1].0 - 12.).abs() < EPSILON, "{strict:?}");
+    }
+}
+
+/// Of two spans with the same line height, the one whose box reaches furthest above the baseline
+/// sizes the line, whatever their order.
+#[test]
+fn largest_line_height_tie_takes_the_box_reaching_highest() {
+    let text = "roboto مرحبا";
+    let roboto = 0..7;
+    let arabic = 7..text.len();
+    for spans in [
+        [
+            Span::new(roboto.clone(), "Roboto", 20., 30.),
+            Span::new(arabic.clone(), "Noto Kufi Arabic", 20., 30.),
+        ],
+        [
+            Span::new(roboto.clone(), "Noto Kufi Arabic", 20., 30.),
+            Span::new(arabic.clone(), "Roboto", 20., 30.),
+        ],
+    ] {
+        let layout = layout_sized(
+            text,
+            LineHeight::Absolute(0.),
+            LeadingDistribution::Proportional,
+            LineBoxSizing::LargestLineHeight,
+            &spans,
+            None,
+        );
+        let line = layout.get(0).unwrap();
+        let highest = run_fonts(&line)
+            .iter()
+            .map(above_fraction)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let (height, baseline) = heights_and_baselines(&layout)[0];
+        assert!((height - 30.).abs() < EPSILON, "line height {height}");
+        assert!(
+            (baseline - 30. * highest).abs() < EPSILON,
+            "baseline {baseline}, expected {}",
+            30. * highest
+        );
+        assert_glyphs_on_the_baseline(&line);
+    }
+}
+
+/// The two fonts of `proportional_line_of_mixed_fonts_can_exceed_the_largest_line_height` make a
+/// line of exactly their line height.
+#[test]
+fn largest_line_height_of_mixed_fonts() {
+    let text = "abc مرحبا";
+    let spans = [
+        Span::roboto(0..4, 20., 30.),
+        Span::new(4..text.len(), "Noto Kufi Arabic", 20., 30.),
+    ];
+    let layout = layout_sized(
+        text,
+        LineHeight::Absolute(0.),
+        LeadingDistribution::Proportional,
+        LineBoxSizing::LargestLineHeight,
+        &spans,
+        None,
+    );
+    let (height, baseline) = heights_and_baselines(&layout)[0];
+    assert!((height - 30.).abs() < EPSILON, "line height {height}");
+    // Roboto's 1900/2400 of 30.
+    assert!((baseline - 23.75).abs() < 1e-3, "baseline {baseline}");
+}
+
+/// Each line is sized by the largest line height on it.
+#[test]
+fn largest_line_height_per_line() {
+    let text = "roboto مرحبا\nمرحبا arimo";
+    let first_line = 0..18;
+    let spans = [
+        Span::new(0..7, "Roboto", 21., 25.2),
+        Span::new(7..first_line.end, "Noto Kufi Arabic", 13., 24.),
+        Span::new(
+            first_line.end..first_line.end + 11,
+            "Noto Kufi Arabic",
+            13.,
+            15.6,
+        ),
+        Span::new(first_line.end + 11..text.len(), "Arimo", 30., 12.),
+    ];
+    let layout = layout_sized(
+        text,
+        LineHeight::Absolute(0.),
+        LeadingDistribution::Proportional,
+        LineBoxSizing::LargestLineHeight,
+        &spans,
+        None,
+    );
+    let lines = heights_and_baselines(&layout);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!((lines[0].0 - 25.2).abs() < EPSILON, "{lines:?}");
+    assert!((lines[1].0 - 15.6).abs() < EPSILON, "{lines:?}");
+    assert!((layout.height() - 40.8).abs() < EPSILON);
+    for line in layout.lines() {
+        assert_glyphs_on_the_baseline(&line);
+    }
+}
+
+/// The root style's strut is a span on every line: its line height is a floor.
+#[test]
+fn largest_line_height_includes_the_root() {
+    let text = "roboto";
+    let layout = layout_sized(
+        text,
+        LineHeight::Absolute(40.),
+        LeadingDistribution::Proportional,
+        LineBoxSizing::LargestLineHeight,
+        &[Span::roboto(0..6, 13., 15.6)],
+        None,
+    );
+    let (height, _) = heights_and_baselines(&layout)[0];
+    assert!((height - 40.).abs() < EPSILON, "line height {height}");
+}
+
+/// The tallest span's box is placed by its own leading distribution, here half-leading.
+#[test]
+fn largest_line_height_with_half_leading() {
+    let text = "roboto مرحبا";
+    let spans = [
+        Span::roboto(0..7, 21., 25.2),
+        Span::new(7..text.len(), "Noto Kufi Arabic", 13., 24.),
+    ];
+    let layout = layout_sized(
+        text,
+        LineHeight::Absolute(0.),
+        LeadingDistribution::HalfLeading,
+        LineBoxSizing::LargestLineHeight,
+        &spans,
+        None,
+    );
+    let line = layout.get(0).unwrap();
+    let roboto = run_fonts(&line)[0];
+    let (height, baseline) = heights_and_baselines(&layout)[0];
+    assert!((height - 25.2).abs() < EPSILON, "line height {height}");
+    let half_leading = (25.2 - (roboto.ascent + roboto.descent)) / 2.;
+    assert!((baseline - (roboto.ascent + half_leading)).abs() < EPSILON);
+}
+
+/// An inline box is an object, not a span, so it still grows the line box to fit.
+#[test]
+fn largest_line_height_grows_for_an_inline_box() {
+    let text = "roboto";
+    let layout = layout_sized(
+        text,
+        LineHeight::Absolute(0.),
+        LeadingDistribution::Proportional,
+        LineBoxSizing::LargestLineHeight,
+        &[Span::roboto(0..6, 13., 15.6)],
+        Some(InlineBox {
+            id: 0,
+            kind: InlineBoxKind::InFlow,
+            index: 3,
+            width: 10.,
+            height: 50.,
+            baseline: None,
+            vertical_align: VerticalAlign::BASELINE,
+        }),
+    );
+    let line = layout.get(0).unwrap();
+    let roboto = run_fonts(&line)[0];
+    let under = 15.6 * (1. - above_fraction(&roboto));
+    let (height, baseline) = heights_and_baselines(&layout)[0];
+    // The box sits on the baseline, so the line reaches its top above it.
+    assert!((baseline - 50.).abs() < EPSILON, "baseline {baseline}");
+    assert!(
+        (height - (50. + under)).abs() < EPSILON,
+        "line height {height}"
+    );
+}
+
+/// A `normal` line height is the resolved line height of its span.
+#[test]
+fn largest_line_height_of_a_metrics_relative_span() {
+    let text = "normal abs";
+    let spans = [
+        Span {
+            range: 0..7,
+            family: "Arimo",
+            font_size: 20.,
+            line_height: LineHeight::MetricsRelative(1.5),
+        },
+        Span::new(7..text.len(), "Noto Kufi Arabic", 20., 20.),
+    ];
+    let layout = layout_sized(
+        text,
+        LineHeight::Absolute(0.),
+        LeadingDistribution::Proportional,
+        LineBoxSizing::LargestLineHeight,
+        &spans,
+        None,
+    );
+    let line = layout.get(0).unwrap();
+    let arimo = run_fonts(&line)[0];
+    let line_height = 1.5 * (arimo.ascent + arimo.descent + arimo.leading);
+    let (height, baseline) = heights_and_baselines(&layout)[0];
+    assert!(
+        (height - line_height).abs() < EPSILON,
+        "line height {height}"
+    );
+    assert!((baseline - 1.5 * (arimo.ascent + arimo.leading / 2.)).abs() < EPSILON);
 }
