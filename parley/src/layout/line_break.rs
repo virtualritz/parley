@@ -27,7 +27,7 @@ use crate::{
 };
 
 use core::ops::Range;
-use parley_engine::shape::Whitespace;
+use parley_engine::shape::{Character, Whitespace};
 use parley_engine::{Atom, Atoms, ShapedSlice};
 use smallvec::SmallVec;
 
@@ -314,19 +314,19 @@ impl LineBoxMetrics {
         }
     }
 
-    /// Add the glyphs of a text atom of `style_index` in layout item `item_idx`, a run whose own
-    /// box is `run_box` (see [`run_box_metrics`]).
+    /// Add the glyphs of style `style_index` of a text atom in layout item `item_idx`, which are
+    /// `glyphs` of `data`.
     ///
-    /// This adds the style's span box together with its ancestors, and the run's box if it has
-    /// one (the glyph font may be a fallback font and differ from the style's first available
-    /// font).
-    #[inline]
-    fn add_text(
+    /// This adds the style's span box together with its ancestors, and the box of the run's
+    /// glyphs if the style has one (see [`run_box_metrics`]; the glyph font may be a fallback
+    /// font and differ from the style's first available font).
+    #[inline(always)]
+    fn add_text<B: Brush>(
         &mut self,
         item_idx: usize,
         style_index: u16,
-        style_metrics: &[StyleMetrics],
-        run_box: Option<&BoxMetrics>,
+        data: &LayoutData<B>,
+        glyphs: RunGlyphs,
         contributed: &mut Vec<u16>,
     ) {
         self.has_content = true;
@@ -335,11 +335,28 @@ impl LineBoxMetrics {
         if self.last_text == (item_idx, style_index) {
             return;
         }
+        self.add_new_text(item_idx, style_index, data, glyphs, contributed);
+    }
+
+    /// The part of [`Self::add_text`] for text whose boxes may not be on the line yet.
+    ///
+    /// This is kept out of line, so that the common case of [`Self::add_text`] stays small enough
+    /// to inline into the line breaking loop.
+    #[inline(never)]
+    fn add_new_text<B: Brush>(
+        &mut self,
+        item_idx: usize,
+        style_index: u16,
+        data: &LayoutData<B>,
+        glyphs: RunGlyphs,
+        contributed: &mut Vec<u16>,
+    ) {
         self.last_text = (item_idx, style_index);
+        let style_metrics = &data.style_metrics;
         if contributed.last() != Some(&style_index) {
             self.add_style(style_index, style_metrics, contributed);
         }
-        let Some(run_box) = run_box else {
+        let Some(run_box) = run_box_metrics(data, glyphs, style_index) else {
             return;
         };
         let (baseline_offset, aligned_subtree) = style_metrics
@@ -357,9 +374,8 @@ impl LineBoxMetrics {
     /// Forget which text atom was added last, so that the next one adds its boxes even if it
     /// shares the last one's layout item and style.
     ///
-    /// The line height can change within a run (see
-    /// [`LayoutData::line_heights`](crate::layout::data::LayoutData::line_heights)), and with it
-    /// the run's box, so this is called whenever the line breaker moves to another line height.
+    /// The line height can change within a run (see [`RunGlyphs`]), and with it the run's box, so
+    /// this is called whenever the line breaker moves to another line height.
     #[inline]
     fn forget_last_text(&mut self) {
         self.last_text = Self::default().last_text;
@@ -435,6 +451,16 @@ fn atoms_until_line_height_change<'a, B: Brush>(
         line_height,
         is_last,
     )
+}
+
+/// Atoms of a run that all have the same line height, as yielded by
+/// [`atoms_until_line_height_change`].
+#[derive(Clone, Copy)]
+struct RunGlyphs {
+    /// The run, as an index into the layout's runs.
+    run_idx: usize,
+    /// The line height of the atoms.
+    line_height: f32,
 }
 
 #[derive(Clone, Default)]
@@ -586,23 +612,24 @@ impl Default for BreakerState {
 impl BreakerState {
     /// Add the atom currently being evaluated to the current line.
     ///
-    /// `run_box` is the box of the atom's run (see [`run_box_metrics`]). `style_index` is the
-    /// atom's style, whose span box (and those of its ancestors) is added to the line too.
+    /// The atom is part of `glyphs` of `data`. The span box of the atom's style (and those of its
+    /// ancestors) is added to the line, together with the box of the run's glyphs if the style
+    /// has one (see [`run_box_metrics`]).
     ///
     /// A style change that doesn't affect shaping, such as a line height change, can fall inside
     /// an atom (e.g., inside a ligature). As an atom is placed on a line as a whole, it takes the
-    /// largest line height of its characters: the span boxes of its other characters' styles are
-    /// added too.
+    /// largest line height of its characters: the boxes of its other characters' styles are added
+    /// too.
+    ///
     /// `is_word_separator` is `true` iff the atom is a [word separator](`is_word_separator`), i.e.,
     /// a justification opportunity.
-    #[inline]
-    fn append_atom_to_line(
+    #[inline(always)]
+    fn append_atom_to_line<B: Brush>(
         &mut self,
         atom: &Atom<'_>,
         next_x: f32,
-        style_index: u16,
-        style_metrics: &[StyleMetrics],
-        run_box: Option<&BoxMetrics>,
+        data: &LayoutData<B>,
+        glyphs: RunGlyphs,
         is_word_separator: bool,
     ) {
         self.line.items.end = self.item_idx + 1;
@@ -610,28 +637,43 @@ impl BreakerState {
         self.cluster_idx = atom.shaped_clusters_range().end;
         self.line.x = next_x;
         self.line.num_word_separators += u32::from(is_word_separator);
+        let characters = atom.characters();
         self.line.box_metrics.add_text(
             self.item_idx,
-            style_index,
-            style_metrics,
-            run_box,
+            characters[0].style_index,
+            data,
+            glyphs,
             &mut self.contributed,
         );
-        let characters = atom.characters();
+        // Most atoms are a single character.
         if characters.len() > 1 {
-            let mut prev_style_index = style_index;
-            for character in &characters[1..] {
-                if character.style_index != prev_style_index {
-                    prev_style_index = character.style_index;
-                    self.line.box_metrics.add_style(
-                        character.style_index,
-                        style_metrics,
-                        &mut self.contributed,
-                    );
-                }
-            }
+            self.add_atom_style_changes(characters, data, glyphs);
         }
         self.update_max_height_exceeded();
+    }
+
+    /// Add the text of each style change within the `characters` of an atom (see
+    /// [`Self::append_atom_to_line`]), whose first character's text has already been added.
+    #[inline(never)]
+    fn add_atom_style_changes<B: Brush>(
+        &mut self,
+        characters: &[Character],
+        data: &LayoutData<B>,
+        glyphs: RunGlyphs,
+    ) {
+        let mut style_index = characters[0].style_index;
+        for character in &characters[1..] {
+            if character.style_index != style_index {
+                style_index = character.style_index;
+                self.line.box_metrics.add_text(
+                    self.item_idx,
+                    style_index,
+                    data,
+                    glyphs,
+                    &mut self.contributed,
+                );
+            }
+        }
     }
 
     /// Add an inline box to the line.
@@ -1094,16 +1136,17 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                     // The line height can change within the run, so we process the run one line
                     // height at a time.
                     //
-                    // The atoms yielded all have the same font and line height, so the run's box
-                    // is the same for all of them.
+                    // The atoms yielded all have the same font and line height.
                     let (atoms, line_height, reaches_run_end) = atoms_until_line_height_change(
                         &self.layout.data,
                         &run,
                         slice,
                         self.state.cluster_idx,
                     );
-                    let run_box = run_box_metrics(&self.layout.data, run_idx, line_height);
-                    let run_box = run_box.as_ref();
+                    let glyphs = RunGlyphs {
+                        run_idx,
+                        line_height,
+                    };
                     self.state.line.box_metrics.forget_last_text();
 
                     // Iterate over the atoms
@@ -1133,9 +1176,8 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                             self.state.append_atom_to_line(
                                 &atom,
                                 self.state.line.x,
-                                style_index,
-                                &self.layout.data.style_metrics,
-                                run_box,
+                                &self.layout.data,
+                                glyphs,
                                 is_separator,
                             );
 
@@ -1180,9 +1222,8 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                             self.state.append_atom_to_line(
                                 &atom,
                                 next_x,
-                                style_index,
-                                &self.layout.data.style_metrics,
-                                run_box,
+                                &self.layout.data,
+                                glyphs,
                                 is_separator,
                             );
                         }
@@ -1209,9 +1250,8 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                                 self.state.append_atom_to_line(
                                     &atom,
                                     next_x,
-                                    style_index,
-                                    &self.layout.data.style_metrics,
-                                    run_box,
+                                    &self.layout.data,
+                                    glyphs,
                                     is_separator,
                                 );
                             }
@@ -1254,9 +1294,8 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                                 self.state.append_atom_to_line(
                                     &atom,
                                     next_x,
-                                    style_index,
-                                    &self.layout.data.style_metrics,
-                                    run_box,
+                                    &self.layout.data,
+                                    glyphs,
                                     is_separator,
                                 );
                             }
@@ -1358,9 +1397,10 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                         slice,
                         self.state.cluster_idx,
                     );
-                    // Note that these atoms' run box is the same for all of them.
-                    let run_box = run_box_metrics(&self.layout.data, run_idx, line_height);
-                    let run_box = run_box.as_ref();
+                    let glyphs = RunGlyphs {
+                        run_idx,
+                        line_height,
+                    };
                     self.state.line.box_metrics.forget_last_text();
 
                     for atom in atoms {
@@ -1386,9 +1426,8 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                         self.state.append_atom_to_line(
                             &atom,
                             next_x,
-                            first_character.style_index,
-                            &self.layout.data.style_metrics,
-                            run_box,
+                            &self.layout.data,
+                            glyphs,
                             is_separator,
                         );
                         char_count += atom.char_range().len() as u32;
@@ -1534,13 +1573,16 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                 let line_heights = &self.layout.data.runs[index].line_heights;
                 let line_height =
                     self.layout.data.line_heights[line_heights.end as usize - 1].line_height;
-                let run_box = run_box_metrics(&self.layout.data, index, line_height);
+                let glyphs = RunGlyphs {
+                    run_idx: index,
+                    line_height,
+                };
                 self.state.line.box_metrics.forget_last_text();
                 self.state.line.box_metrics.add_text(
                     index,
                     style_index,
-                    &self.layout.data.style_metrics,
-                    run_box.as_ref(),
+                    &self.layout.data,
+                    glyphs,
                     &mut self.state.contributed,
                 );
                 line.metrics.line_height = self.state.line.box_metrics.line_height();
@@ -2011,31 +2053,28 @@ fn hanging_whitespace<B: Brush>(
     )
 }
 
-/// The inline box of a run: the box of its shaped font (which may be a fallback font and differ
-/// from the style's first available font) expanded to `line_height`. Each of the run's atoms adds
-/// it to a line's extents.
-///
-/// The line height can change within a run, so `line_height` is that of the atoms being added
-/// (see [`LayoutData::line_heights`](crate::layout::data::LayoutData::line_heights)).
+/// The inline box of `glyphs` of style `style_index`: the box of their run's shaped font (which
+/// may be a fallback font and differ from the style's first available font) expanded to their
+/// line height. Each of the run's atoms adds it to a line's extents, for each style of the atom's
+/// characters.
 ///
 /// Per [CSS Inline 3 § 4.1], glyphs from fonts other than the first available font only
 /// contribute to the line when the `line-height` is `normal` ([`LineHeight::MetricsRelative`]);
-/// otherwise the style's span box alone sizes the line and this returns `None`.
+/// otherwise the style's span box alone sizes the line and this returns `None`. This is decided
+/// by the style of the glyphs rather than by the first character of their run: a style change
+/// that only changes the line height does not split runs, so one run can hold text of both.
 ///
 /// [CSS Inline 3 § 4.1]: https://drafts.csswg.org/css-inline-3/#inline-height
 #[inline]
 fn run_box_metrics<B: Brush>(
     data: &LayoutData<B>,
-    run_idx: usize,
-    line_height: f32,
+    glyphs: RunGlyphs,
+    style_index: u16,
 ) -> Option<BoxMetrics> {
-    let shaped_run = &data.shaped_text.runs()[run_idx];
-    let style_index =
-        data.shaped_text.characters()[shaped_run.characters_range.start as usize].style_index;
     match data.styles[usize::from(style_index)].line_height {
         LineHeight::MetricsRelative(_) => Some(BoxMetrics::from_font(
-            &shaped_run.font_metrics,
-            line_height,
+            &data.shaped_text.runs()[glyphs.run_idx].font_metrics,
+            glyphs.line_height,
             data.quantize,
         )),
         LineHeight::FontSizeRelative(_) | LineHeight::Absolute(_) => None,

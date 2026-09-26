@@ -887,3 +887,33 @@ fn lines_line_height_change_within_ligature() {
         "the line must be sized by every character of the ligature"
     );
 }
+
+/// A run's glyphs add their own box to the line when their line height is `normal`
+/// (`MetricsRelative`), which matters when the run's font is a fallback font. A style change that
+/// only changes the line height does not split runs, so whether the glyphs add a box depends on
+/// the style of the text, not on the first character of its run.
+#[test]
+fn lines_line_height_normal_in_fallback_run() {
+    let mut env = TestEnv::new(test_name!(), None);
+
+    // Roboto has no Arabic, so this is set in the fallback font Noto Kufi Arabic, which is taller.
+    let text = "عليكم";
+    let normal = LineHeight::MetricsRelative(1.);
+    let normal_height = line_heights(&build_with_line_heights(&mut env, text, normal, &[]))[0];
+    let first_available_normal_height =
+        line_heights(&build_with_line_heights(&mut env, "a", normal, &[]))[0];
+    assert!(
+        normal_height > first_available_normal_height,
+        "expected the fallback font to be taller than the first available font"
+    );
+
+    // The last three letters have a `normal` line height; the run starts with an absolute one.
+    let layout = build_with_line_heights(
+        &mut env,
+        text,
+        LineHeight::Absolute(10.),
+        &[(4..10, normal)],
+    );
+    assert_eq!(layout.lines().next().unwrap().runs().count(), 1);
+    assert_eq!(line_heights(&layout), [normal_height], "lines of {text:?}");
+}
