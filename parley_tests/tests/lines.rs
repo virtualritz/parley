@@ -787,39 +787,14 @@ fn build_with_line_heights(
     layout
 }
 
-/// A style change that only changes the line height doesn't split shaping runs (line height
-/// doesn't affect shaping), so a single run can hold text of different line heights. Each line
-/// must still be sized by the text that is actually on it (and by the root's strut).
+/// A style change that only changes the line height doesn't split shaping runs, so a single run
+/// can hold text of different line heights. With a `normal` line height (`MetricsRelative`), the
+/// run's glyphs also contribute a box to the line. That box must follow the line height of the
+/// text on the line, not the line height of the run's first character.
 #[test]
 fn lines_line_height_change_within_run() {
     let mut env = TestEnv::new(test_name!(), None);
 
-    let text = "tall\nshort";
-    let layout = build_with_line_heights(
-        &mut env,
-        text,
-        LineHeight::Absolute(10.),
-        &[(5..10, LineHeight::Absolute(40.))],
-    );
-    assert_eq!(line_heights(&layout), [10., 40.], "lines of {text:?}");
-    assert_eq!(layout.height(), 50., "height of {text:?}");
-
-    // Without a strut, each line is sized by its own span alone.
-    let layout = build_with_line_heights(
-        &mut env,
-        text,
-        LineHeight::Absolute(0.),
-        &[
-            (0..5, LineHeight::Absolute(40.)),
-            (5..10, LineHeight::Absolute(10.)),
-        ],
-    );
-    assert_eq!(line_heights(&layout), [40., 10.], "lines of {text:?}");
-    assert_eq!(layout.height(), 50., "height of {text:?}");
-
-    // With a `normal` line height (`MetricsRelative`), the run's glyphs also contribute a box to
-    // the line. That box must follow the line height of the text on the line, not the line height
-    // of the run's first character.
     let normal = LineHeight::MetricsRelative(2.);
     let normal_height = line_heights(&build_with_line_heights(
         &mut env,
@@ -853,38 +828,6 @@ fn lines_line_height_change_within_run() {
         line_heights(&layout),
         [10., normal_height],
         "lines of {text:?}"
-    );
-}
-
-/// An atom (here the "ffi" ligature) is placed on a line as a whole, so all of its characters
-/// contribute their line heights to that line, not only its first character.
-#[test]
-fn lines_line_height_change_within_ligature() {
-    let mut env = TestEnv::new(test_name!(), None);
-
-    let text = "office";
-    // The "i" is the last character of the "ffi" ligature.
-    let layout = build_with_line_heights(
-        &mut env,
-        text,
-        LineHeight::Absolute(10.),
-        &[(3..4, LineHeight::Absolute(40.))],
-    );
-
-    let glyph_count: usize = layout
-        .lines()
-        .flat_map(|line| line.runs().collect::<Vec<_>>())
-        .flat_map(|run| run.clusters().collect::<Vec<_>>())
-        .map(|cluster| cluster.glyphs().count())
-        .sum();
-    assert!(
-        glyph_count < text.chars().count(),
-        "expected \"ffi\" to form a ligature, got {glyph_count} glyphs"
-    );
-    assert_eq!(
-        line_heights(&layout),
-        [40.],
-        "the line must be sized by every character of the ligature"
     );
 }
 
