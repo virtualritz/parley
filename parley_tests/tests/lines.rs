@@ -761,3 +761,102 @@ fn line_height_change_inside_ligature() {
 
     env.render_and_check_snapshot(&layout, None, &[]);
 }
+
+/// Returns the line height of each line, as given by the line metrics.
+fn line_heights<B: Brush>(layout: &Layout<B>) -> Vec<f32> {
+    layout
+        .lines()
+        .map(|line| line.metrics().line_height)
+        .collect()
+}
+
+/// Builds and breaks `text`, with a root line height of `root` and the given line height spans.
+fn build_with_line_heights(
+    env: &mut TestEnv,
+    text: &str,
+    root: LineHeight,
+    spans: &[(std::ops::Range<usize>, LineHeight)],
+) -> Layout<ColorBrush> {
+    let mut builder = env.ranged_builder(text);
+    builder.push_default(root);
+    for (range, line_height) in spans {
+        builder.push(*line_height, range.clone());
+    }
+    let mut layout = builder.build(text);
+    layout.break_all_lines(None);
+    layout
+}
+
+/// A style change that only changes the line height doesn't split shaping runs, so a single run
+/// can hold text of different line heights. With a `normal` line height (`MetricsRelative`), the
+/// run's glyphs also contribute a box to the line. That box must follow the line height of the
+/// text on the line, not the line height of the run's first character.
+#[test]
+fn lines_line_height_change_within_run() {
+    let mut env = TestEnv::new(test_name!(), None);
+
+    let normal = LineHeight::MetricsRelative(2.);
+    let normal_height = line_heights(&build_with_line_heights(
+        &mut env,
+        "normal",
+        LineHeight::Absolute(10.),
+        &[(0..6, normal)],
+    ))[0];
+    assert!(normal_height > 10., "expected a tall normal line height");
+
+    let text = "normal\nabs";
+    let layout = build_with_line_heights(
+        &mut env,
+        text,
+        LineHeight::Absolute(10.),
+        &[(0..7, normal), (7..10, LineHeight::Absolute(10.))],
+    );
+    assert_eq!(
+        line_heights(&layout),
+        [normal_height, 10.],
+        "lines of {text:?}"
+    );
+
+    let text = "abs\nnormal";
+    let layout = build_with_line_heights(
+        &mut env,
+        text,
+        LineHeight::Absolute(10.),
+        &[(0..4, LineHeight::Absolute(10.)), (4..10, normal)],
+    );
+    assert_eq!(
+        line_heights(&layout),
+        [10., normal_height],
+        "lines of {text:?}"
+    );
+}
+
+/// A run's glyphs add their own box to the line when their line height is `normal`
+/// (`MetricsRelative`), which matters when the run's font is a fallback font. A style change that
+/// only changes the line height does not split runs, so whether the glyphs add a box depends on
+/// the style of the text, not on the first character of its run.
+#[test]
+fn lines_line_height_normal_in_fallback_run() {
+    let mut env = TestEnv::new(test_name!(), None);
+
+    // Roboto has no Arabic, so this is set in the fallback font Noto Kufi Arabic, which is taller.
+    let text = "عليكم";
+    let normal = LineHeight::MetricsRelative(1.);
+    let normal_height = line_heights(&build_with_line_heights(&mut env, text, normal, &[]))[0];
+    let first_available_normal_height =
+        line_heights(&build_with_line_heights(&mut env, "a", normal, &[]))[0];
+    assert!(
+        normal_height > first_available_normal_height,
+        "expected the fallback font to be taller than the first available font"
+    );
+
+    // The last three letters have a `normal` line height; the run starts with an absolute one.
+    let layout = build_with_line_heights(
+        &mut env,
+        text,
+        LineHeight::Absolute(10.),
+        &[(4..10, normal)],
+    );
+    assert_eq!(layout.lines().next().unwrap().runs().count(), 1);
+    assert_eq!(line_heights(&layout), [normal_height], "lines of {text:?}");
+}
