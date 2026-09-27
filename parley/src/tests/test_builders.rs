@@ -203,10 +203,12 @@ fn assert_builders_produce_same_result<'b>(
     assert_eq_layout_data(&layout_truth.data, &layout.data, "lcx_d_rb_one");
 }
 
-/// Returns a root style that uses non-default values.
+/// Returns a root style that uses non-default values, except for `leading_distribution`.
 ///
 /// The [`TreeBuilder`] version of [`set_root_style`].
-fn create_root_style() -> TextStyle<'static, 'static, ColorBrush> {
+fn create_root_style(
+    leading_distribution: LeadingDistribution,
+) -> TextStyle<'static, 'static, ColorBrush> {
     TextStyle {
         font_family: FontFamily::from(FONT_FAMILY_LIST),
         font_size: 20.,
@@ -226,7 +228,7 @@ fn create_root_style() -> TextStyle<'static, 'static, ColorBrush> {
         strikethrough_size: Some(1.7),
         strikethrough_brush: Some(ColorBrush::new(palette::css::BEIGE)),
         line_height: LineHeight::Absolute(30.),
-        leading_distribution: LeadingDistribution::Proportional,
+        leading_distribution,
         // Parent-relative, so it compounds through nested tree spans but not through ranged
         // styles; keep it at the default so both builders agree.
         vertical_align: VerticalAlign::BASELINE,
@@ -239,10 +241,13 @@ fn create_root_style() -> TextStyle<'static, 'static, ColorBrush> {
     }
 }
 
-/// Sets a root style with non-default values.
+/// Sets a root style with non-default values, except for `leading_distribution`.
 ///
 /// The [`RangedBuilder`] version of [`create_root_style`].
-fn set_root_style(rb: &mut RangedBuilder<'_, ColorBrush>) {
+fn set_root_style(
+    rb: &mut RangedBuilder<'_, ColorBrush>,
+    leading_distribution: LeadingDistribution,
+) {
     rb.push_default(FontFamily::from(FONT_FAMILY_LIST));
     rb.push_default(StyleProperty::FontSize(20.));
     rb.push_default(StyleProperty::FontWidth(FontWidth::CONDENSED));
@@ -265,7 +270,7 @@ fn set_root_style(rb: &mut RangedBuilder<'_, ColorBrush>) {
         palette::css::BEIGE,
     ))));
     rb.push_default(LineHeight::Absolute(30.));
-    rb.push_default(LeadingDistribution::Proportional);
+    rb.push_default(leading_distribution);
     rb.push_default(VerticalAlign::BASELINE);
     rb.push_default(StyleProperty::WordSpacing(2.));
     rb.push_default(StyleProperty::LetterSpacing(1.5));
@@ -376,7 +381,7 @@ fn style_runs_first_run_can_use_nonzero_style_index() {
     let scale = 2.;
     let quantize = false;
     let max_advance = Some(50.);
-    let root_style = create_root_style();
+    let root_style = create_root_style(LeadingDistribution::Proportional);
     let mut modified_style = root_style.clone();
     modified_style.font_size = 40.;
 
@@ -392,7 +397,7 @@ fn style_runs_first_run_can_use_nonzero_style_index() {
     };
 
     let ranged = build_layout_with_ranged(&mut fcx, &mut lcx_a, &ropts, |rb| {
-        set_root_style(rb);
+        set_root_style(rb, LeadingDistribution::Proportional);
         rb.push(
             StyleProperty::FontSize(modified_style.font_size),
             0..text.len(),
@@ -423,31 +428,37 @@ fn style_runs_first_run_can_use_nonzero_style_index() {
     );
 }
 
-/// Test that all the builders behave the same when given the same root style.
+/// Test that all the builders behave the same when given the same root style, with each leading
+/// distribution.
 #[test]
 fn builders_root_only() {
-    let text = "Builders often wear hard hats for safety while working on construction sites.";
-    let scale = 2.;
-    let quantize = false;
-    let max_advance = Some(50.);
-    let root_style = create_root_style();
+    for leading_distribution in [
+        LeadingDistribution::HalfLeading,
+        LeadingDistribution::Proportional,
+    ] {
+        let text = "Builders often wear hard hats for safety while working on construction sites.";
+        let scale = 2.;
+        let quantize = false;
+        let max_advance = Some(50.);
+        let root_style = create_root_style(leading_distribution);
 
-    let with_ranged_builder = |rb: &mut RangedBuilder<'_, ColorBrush>| {
-        set_root_style(rb);
-    };
-    let with_tree_builder = |tb: &mut TreeBuilder<'_, ColorBrush>| {
-        tb.push_text(text);
-    };
+        let with_ranged_builder = |rb: &mut RangedBuilder<'_, ColorBrush>| {
+            set_root_style(rb, leading_distribution);
+        };
+        let with_tree_builder = |tb: &mut TreeBuilder<'_, ColorBrush>| {
+            tb.push_text(text);
+        };
 
-    assert_builders_produce_same_result(
-        text,
-        scale,
-        quantize,
-        max_advance,
-        &root_style,
-        with_ranged_builder,
-        with_tree_builder,
-    );
+        assert_builders_produce_same_result(
+            text,
+            scale,
+            quantize,
+            max_advance,
+            &root_style,
+            with_ranged_builder,
+            with_tree_builder,
+        );
+    }
 }
 
 /// Test that an empty layout doesn't crash
@@ -457,9 +468,11 @@ fn builders_empty() {
     let scale = 1.;
     let quantize = false;
     let max_advance = Some(50.);
-    let root_style = create_root_style();
+    let root_style = create_root_style(LeadingDistribution::Proportional);
 
-    let with_ranged_builder = |rb: &mut RangedBuilder<'_, ColorBrush>| set_root_style(rb);
+    let with_ranged_builder = |rb: &mut RangedBuilder<'_, ColorBrush>| {
+        set_root_style(rb, LeadingDistribution::Proportional);
+    };
     let with_tree_builder = |_tb: &mut TreeBuilder<'_, ColorBrush>| {};
 
     assert_builders_produce_same_result(
@@ -473,58 +486,65 @@ fn builders_empty() {
     );
 }
 
-/// Test that all the builders behave the same with mixed styles.
+/// Test that all the builders behave the same with mixed styles, with each leading distribution.
 #[test]
 fn builders_mixed_styles() {
-    let text = "Builders often wear hard hats for safety while working on construction sites.";
-    let scale = 2.;
-    let quantize = false;
-    let max_advance = Some(50.);
-    let root_style = create_root_style();
+    for leading_distribution in [
+        LeadingDistribution::HalfLeading,
+        LeadingDistribution::Proportional,
+    ] {
+        let text = "Builders often wear hard hats for safety while working on construction sites.";
+        let scale = 2.;
+        let quantize = false;
+        let max_advance = Some(50.);
+        let root_style = create_root_style(leading_distribution);
 
-    let with_ranged_builder = |rb: &mut RangedBuilder<'_, ColorBrush>| {
-        set_root_style(rb);
+        let with_ranged_builder = |rb: &mut RangedBuilder<'_, ColorBrush>| {
+            set_root_style(rb, leading_distribution);
 
-        // Make the first word bigger
-        rb.push(StyleProperty::FontSize(68.), 0..8);
-        // Push two modified styles for the same range
-        rb.push(StyleProperty::LetterSpacing(4.), 12..17);
-        rb.push(StyleProperty::WordSpacing(3.), 12..17);
-        // Plus, change the line height for the last letter
-        rb.push(StyleProperty::LineHeight(LineHeight::Absolute(40.)), 16..17);
-    };
-    let with_tree_builder = |tb: &mut TreeBuilder<'_, ColorBrush>| {
-        // Make the first word bigger
-        tb.push_style_modification_span(&[StyleProperty::FontSize(68.)]);
-        tb.push_text(&text[..8]);
-        tb.pop_style_span();
+            // Make the first word bigger
+            rb.push(StyleProperty::FontSize(68.), 0..8);
+            // Push two modified styles for the same range
+            rb.push(StyleProperty::LetterSpacing(4.), 12..17);
+            rb.push(StyleProperty::WordSpacing(3.), 12..17);
+            // Plus, change the line height for the last letter
+            rb.push(StyleProperty::LineHeight(LineHeight::Absolute(40.)), 16..17);
+        };
+        let with_tree_builder = |tb: &mut TreeBuilder<'_, ColorBrush>| {
+            // Make the first word bigger
+            tb.push_style_modification_span(&[StyleProperty::FontSize(68.)]);
+            tb.push_text(&text[..8]);
+            tb.pop_style_span();
 
-        tb.push_text(&text[8..12]);
+            tb.push_text(&text[8..12]);
 
-        // Push two modified styles in batch
-        tb.push_style_modification_span(&[
-            StyleProperty::LetterSpacing(4.),
-            StyleProperty::WordSpacing(3.),
-        ]);
-        tb.push_text(&text[12..16]);
-        // Plus, change the line height for the last letter
-        tb.push_style_modification_span(&[StyleProperty::LineHeight(LineHeight::Absolute(40.))]);
-        tb.push_text(&text[16..17]);
-        tb.pop_style_span();
-        tb.pop_style_span();
+            // Push two modified styles in batch
+            tb.push_style_modification_span(&[
+                StyleProperty::LetterSpacing(4.),
+                StyleProperty::WordSpacing(3.),
+            ]);
+            tb.push_text(&text[12..16]);
+            // Plus, change the line height for the last letter
+            tb.push_style_modification_span(&[StyleProperty::LineHeight(LineHeight::Absolute(
+                40.,
+            ))]);
+            tb.push_text(&text[16..17]);
+            tb.pop_style_span();
+            tb.pop_style_span();
 
-        tb.push_text(&text[17..]);
-    };
+            tb.push_text(&text[17..]);
+        };
 
-    assert_builders_produce_same_result(
-        text,
-        scale,
-        quantize,
-        max_advance,
-        &root_style,
-        with_ranged_builder,
-        with_tree_builder,
-    );
+        assert_builders_produce_same_result(
+            text,
+            scale,
+            quantize,
+            max_advance,
+            &root_style,
+            with_ranged_builder,
+            with_tree_builder,
+        );
+    }
 }
 
 /// Check that reusing a [`Layout`] works, by overwriting a layout with
@@ -574,7 +594,7 @@ fn builders_crlf_counts_as_single_line_break() {
             text,
         };
         let layout = build_layout_with_ranged(&mut fcx, &mut lcx, &ropts, |rb| {
-            set_root_style(rb);
+            set_root_style(rb, LeadingDistribution::Proportional);
         });
         layout.lines().len()
     };
@@ -625,7 +645,7 @@ fn builders_newline_inside_complex_script_run_is_hard_break() {
             text,
         };
         let layout = build_layout_with_ranged(&mut fcx, &mut lcx, &ropts, |rb| {
-            set_root_style(rb);
+            set_root_style(rb, LeadingDistribution::Proportional);
             rb.push_default(StyleProperty::WordBreak(WordBreak::Normal));
         });
         layout.lines().map(|line| line.break_reason()).collect()
