@@ -207,7 +207,7 @@ impl TallestBox {
 /// truncates them back. Both buffers are append-only within a line, which makes truncation a
 /// correct rollback. It also keeps [`LineState`], which is copied at every line-breaking
 /// opportunity, the same size whatever the [`LineBoxSizing`].
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 struct LineBuffers {
     /// Style indices whose span box has already been added to the current line (see
     /// [`LineBoxMetrics::add_style`]).
@@ -230,6 +230,22 @@ struct LineBuffers {
 struct LineBuffersLen {
     contributed: u32,
     tallest: u32,
+}
+
+impl Clone for LineBuffers {
+    fn clone(&self) -> Self {
+        Self {
+            contributed: self.contributed.clone(),
+            tallest: self.tallest.clone(),
+        }
+    }
+
+    /// Reuses the buffers' allocations, as [`BreakLines`] saves its state with `clone_from` for
+    /// every line.
+    fn clone_from(&mut self, source: &Self) {
+        self.contributed.clone_from(&source.contributed);
+        self.tallest.clone_from(&source.tallest);
+    }
 }
 
 impl LineBuffers {
@@ -767,7 +783,6 @@ pub struct BoxBreakData {
     pub advance: f32,
 }
 
-#[derive(Clone)]
 /// The mutable state of the line breaker.
 ///
 /// This is exposed so that callers using [`BreakLines`] directly can inspect and
@@ -816,6 +831,49 @@ pub struct BreakerState {
     prev_boundary: Option<PrevBoundaryState>,
     /// Saved breaker state for the last emergency line-breaking opportunity
     emergency_boundary: Option<PrevBoundaryState>,
+}
+
+impl Clone for BreakerState {
+    fn clone(&self) -> Self {
+        let mut clone = Self::default();
+        clone.clone_from(self);
+        clone
+    }
+
+    /// Reuses the allocations of the line buffers, as [`BreakLines`] saves its state with
+    /// `clone_from` for every line.
+    fn clone_from(&mut self, source: &Self) {
+        let Self {
+            items,
+            lines,
+            item_idx,
+            run_idx,
+            cluster_idx,
+            line_x,
+            line_y,
+            layout_max_advance,
+            line_max_advance,
+            line_max_height,
+            line,
+            buffers,
+            prev_boundary,
+            emergency_boundary,
+        } = source;
+        self.items = *items;
+        self.lines = *lines;
+        self.item_idx = *item_idx;
+        self.run_idx = *run_idx;
+        self.cluster_idx = *cluster_idx;
+        self.line_x = *line_x;
+        self.line_y = *line_y;
+        self.layout_max_advance = *layout_max_advance;
+        self.line_max_advance = *line_max_advance;
+        self.line_max_height = *line_max_height;
+        self.line.clone_from(line);
+        self.buffers.clone_from(buffers);
+        self.prev_boundary.clone_from(prev_boundary);
+        self.emergency_boundary.clone_from(emergency_boundary);
+    }
 }
 
 impl Default for BreakerState {
