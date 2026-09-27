@@ -15,6 +15,8 @@ use crate::util::line_boxes::{
     heights_and_baselines, layout, run_baselines, run_fonts,
 };
 
+/// Three spans in three fonts with line heights 23, 11 and 25 make a line of 25, where their union
+/// is taller: Noto Kufi Arabic puts less of its line height above the baseline than Arimo does,
 /// so its box reaches further below. The baseline is where the 25 span, in Arimo, puts it.
 #[test]
 fn line_box_sizing_largest_line_height_of_three_fonts() {
@@ -58,6 +60,7 @@ fn line_box_sizing_largest_line_height_of_three_fonts() {
     assert!((union_baseline - baseline).abs() < EPSILON);
 }
 
+/// With spans in one font, every box is proportional to its line height, so the union is the
 /// tallest box: both sizings give the same line heights and baselines.
 #[test]
 fn line_box_sizing_largest_line_height_of_one_font_matches_the_proportional_union() {
@@ -102,6 +105,7 @@ fn line_box_sizing_largest_line_height_of_one_font_matches_the_proportional_unio
     }
 }
 
+/// Of two spans with the same line height, the one whose box reaches furthest above the baseline
 /// sizes the line, whatever their order.
 #[test]
 fn line_box_sizing_largest_line_height_tie_takes_the_box_reaching_highest() {
@@ -141,7 +145,9 @@ fn line_box_sizing_largest_line_height_tie_takes_the_box_reaching_highest() {
     }
 }
 
-/// line of exactly their line height.
+/// The two fonts of
+/// `leading_distribution_proportional_line_of_mixed_fonts_can_exceed_the_largest_line_height`
+/// make a line of exactly their line height.
 #[test]
 fn line_box_sizing_largest_line_height_of_mixed_fonts() {
     let text = "abc مرحبا";

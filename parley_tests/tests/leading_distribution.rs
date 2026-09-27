@@ -16,6 +16,7 @@ use crate::util::line_boxes::{
 };
 use crate::util::{ColorBrush, TestEnv};
 
+/// Spans in one font make a line as tall as the largest of their line heights, whatever their
 /// font sizes, and the baseline sits that line height's share of the ascent below the top.
 #[test]
 fn leading_distribution_proportional_line_is_the_largest_line_height_of_one_font() {
@@ -58,6 +59,7 @@ fn leading_distribution_proportional_line_is_the_largest_line_height_of_one_font
     }
 }
 
+/// With the default half-leading, the smaller font's relatively larger line height reaches
 /// further below the baseline than the larger font's box.
 #[test]
 fn leading_distribution_half_leading_line_is_the_union_of_centred_boxes() {
@@ -124,6 +126,7 @@ fn leading_distribution_proportional_lines_keep_their_own_line_heights() {
     }
 }
 
+/// The root style is every line's strut, and its box takes part like a span's: its line height
 /// is a floor.
 #[test]
 fn leading_distribution_proportional_root_line_height_is_a_floor() {
@@ -140,6 +143,7 @@ fn leading_distribution_proportional_root_line_height_is_a_floor() {
     assert!((baseline_from_top(&line) - 40. * font.above_fraction()).abs() < EPSILON);
 }
 
+/// Spans in fonts with different ascent to descent ratios can make a line taller than the
 /// largest line height: one box reaches highest above the baseline, the other lowest below it.
 #[test]
 fn leading_distribution_proportional_line_of_mixed_fonts_can_exceed_the_largest_line_height() {
@@ -170,6 +174,7 @@ fn leading_distribution_proportional_line_of_mixed_fonts_can_exceed_the_largest_
     assert_glyphs_on_the_baseline(&line);
 }
 
+/// A `normal` (metrics relative) line height is resolved per style as before, and its box puts
 /// the line gap half above and half below the content.
 #[test]
 fn leading_distribution_proportional_metrics_relative_line_height() {
