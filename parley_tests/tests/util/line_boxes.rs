@@ -48,6 +48,11 @@ impl Span {
         self.line_height = line_height;
         self
     }
+
+    pub(crate) fn with_vertical_align(mut self, vertical_align: VerticalAlign) -> Self {
+        self.vertical_align = Some(vertical_align);
+        self
+    }
 }
 
 /// The options of [`layout`] other than the text and the spans.
@@ -75,6 +80,16 @@ impl Options {
 
     pub(crate) fn sizing(mut self, sizing: LineBoxSizing) -> Self {
         self.sizing = sizing;
+        self
+    }
+
+    pub(crate) fn quantize(mut self, quantize: bool) -> Self {
+        self.quantize = quantize;
+        self
+    }
+
+    pub(crate) fn max_advance(mut self, max_advance: Option<f32>) -> Self {
+        self.max_advance = max_advance;
         self
     }
 }
@@ -174,4 +189,13 @@ pub(crate) fn assert_glyphs_on_the_baseline(line: &Line<'_, ColorBrush>) {
             "a glyph run is off the line's baseline"
         );
     }
+}
+
+/// Asserts that `actual` is within [`EPSILON`] of `expected`.
+#[track_caller]
+pub(crate) fn assert_close(actual: f32, expected: f32, what: &str) {
+    assert!(
+        (actual - expected).abs() < EPSILON,
+        "{what}: expected {expected}, got {actual}"
+    );
 }

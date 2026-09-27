@@ -3,14 +3,18 @@
 
 //! Tests for [`LeadingDistribution`].
 
-use parley::{FontFamily, LayoutContext, LeadingDistribution, LineHeight, StyleProperty};
+use parley::{
+    Alignment, AlignmentOptions, FontFamily, LayoutContext, LeadingDistribution, LineBoxSizing,
+    LineHeight, StyleProperty, VerticalAlign,
+};
 
-use crate::util::ColorBrush;
+use crate::test_name;
 use crate::util::env::{FONT_FAMILY_LIST, create_font_context};
 use crate::util::line_boxes::{
-    EPSILON, FontExtents, Options, Span, assert_glyphs_on_the_baseline, baseline_from_top, layout,
-    run_fonts,
+    EPSILON, FontExtents, Options, Span, assert_close, assert_glyphs_on_the_baseline,
+    baseline_from_top, heights_and_baselines, layout, run_baselines, run_fonts,
 };
+use crate::util::{ColorBrush, TestEnv};
 
 /// font sizes, and the baseline sits that line height's share of the ascent below the top.
 #[test]
@@ -210,4 +214,168 @@ fn leading_distribution_is_per_style() {
     let over = 25.2 * large.above_fraction();
     let under = small.descent + (24. - (small.ascent + small.descent)) / 2.;
     assert!((line.metrics().line_height - (over + under)).abs() < EPSILON);
+}
+
+/// The baseline of the second glyph run of `text` relative to the line's baseline (positive
+/// downwards), where the run is a span of 10px text with a line height of 40 and `align`.
+fn span_baseline_offset(distribution: LeadingDistribution, align: VerticalAlign) -> (f32, f32) {
+    let text = "root small";
+    let layout = layout(
+        text,
+        Options::new(LineHeight::Absolute(0.), distribution),
+        &[Span::new(5..10, "Roboto", 10., 40.).with_vertical_align(align)],
+        None,
+    );
+    let line = layout.get(0).unwrap();
+    let baselines = run_baselines(&line);
+    assert_eq!(baselines.len(), 2, "{baselines:?}");
+    // The box of the span reaches this far above its baseline.
+    let span = run_fonts(&line)[1];
+    let over = match distribution {
+        LeadingDistribution::HalfLeading => span.ascent + (40. - (span.ascent + span.descent)) / 2.,
+        LeadingDistribution::Proportional => 40. * span.above_fraction(),
+    };
+    (baselines[1] - line.metrics().baseline, over)
+}
+
+/// `vertical-align: text-top | text-bottom | middle` align a span by its line-height box, so they
+/// place the span according to its leading distribution. `baseline` doesn't.
+#[test]
+fn leading_distribution_moves_vertical_align() {
+    // `text-top` aligns the top of the span's box with the top of the root's content area.
+    let (half_leading, half_leading_over) =
+        span_baseline_offset(LeadingDistribution::HalfLeading, VerticalAlign::TEXT_TOP);
+    let (proportional, proportional_over) =
+        span_baseline_offset(LeadingDistribution::Proportional, VerticalAlign::TEXT_TOP);
+    assert!((half_leading - 8.57).abs() < 0.01, "{half_leading}");
+    assert!((proportional - 16.82).abs() < 0.01, "{proportional}");
+
+    // The other values move the span by the same difference between the boxes' tops.
+    let difference = proportional_over - half_leading_over;
+    assert_close(proportional - half_leading, difference, "text-top");
+    for (align, name) in [
+        (VerticalAlign::TEXT_BOTTOM, "text-bottom"),
+        (VerticalAlign::MIDDLE, "middle"),
+    ] {
+        let (half_leading, _) = span_baseline_offset(LeadingDistribution::HalfLeading, align);
+        let (proportional, _) = span_baseline_offset(LeadingDistribution::Proportional, align);
+        assert_close(proportional - half_leading, difference, name);
+    }
+    for distribution in [
+        LeadingDistribution::HalfLeading,
+        LeadingDistribution::Proportional,
+    ] {
+        let (offset, _) = span_baseline_offset(distribution, VerticalAlign::BASELINE);
+        assert_close(offset, 0., "baseline");
+    }
+}
+
+/// When quantizing, the proportional box is placed with whole-pixel ascents and a floored
+/// leading above the baseline, so baselines and line heights are whole pixels.
+#[test]
+fn leading_distribution_proportional_quantized() {
+    let text = "first second";
+    let layout = layout(
+        text,
+        Options::new(LineHeight::Absolute(0.), LeadingDistribution::Proportional).quantize(true),
+        &[
+            Span::new(0..6, "Roboto", 21., 25.),
+            Span::new(6..12, "Roboto", 13., 24.),
+        ],
+        None,
+    );
+    let line = layout.get(0).unwrap();
+    let fonts = run_fonts(&line);
+    let (large, small) = (fonts[0], fonts[1]);
+    // Each box is `round(ascent) + floor(line_height * fraction - round(ascent))` above the
+    // baseline, where the fraction comes from the unrounded metrics.
+    let over = |font: FontExtents, line_height: f32| {
+        font.ascent.round() + (line_height * font.above_fraction() - font.ascent.round()).floor()
+    };
+    let large_over = over(large, 25.);
+    let small_over = over(small, 24.);
+    let expected_over = large_over.max(small_over);
+    let expected_under = (25. - large_over).max(24. - small_over);
+    let (height, baseline) = heights_and_baselines(&layout)[0];
+    assert_close(baseline, expected_over, "baseline");
+    assert_close(height, expected_over + expected_under, "line height");
+    assert_eq!(baseline, baseline.round(), "baseline {baseline}");
+    assert_eq!(height, height.round(), "line height {height}");
+    assert_glyphs_on_the_baseline(&line);
+}
+
+/// With a `normal` line height, the glyphs of a fallback font add a box of that font, and its
+/// leading is distributed proportionally too.
+#[test]
+fn leading_distribution_proportional_fallback_font() {
+    // Roboto, the first available font, has no Arabic, so this is set in Noto Kufi Arabic.
+    let text = "عليكم";
+    let normal = LineHeight::MetricsRelative(1.5);
+    for sizing in [LineBoxSizing::Union, LineBoxSizing::LargestLineHeight] {
+        let layout = layout(
+            text,
+            Options::new(normal, LeadingDistribution::Proportional).sizing(sizing),
+            &[],
+            None,
+        );
+        let line = layout.get(0).unwrap();
+        let fallback = run_fonts(&line)[0];
+        let line_height = 1.5 * (fallback.ascent + fallback.descent + fallback.leading);
+        let (height, baseline) = heights_and_baselines(&layout)[0];
+        // The fallback font's box is taller than the root's box in Roboto, above and below the
+        // baseline.
+        assert_close(height, line_height, "line height");
+        assert_close(
+            baseline,
+            line_height * fallback.above_fraction(),
+            "baseline",
+        );
+
+        // With half-leading, the same box sits lower.
+        let half_leading = layout_with(text, normal, LeadingDistribution::HalfLeading, sizing);
+        let (_, half_leading_baseline) = heights_and_baselines(&half_leading)[0];
+        let expected = fallback.ascent + (line_height - (fallback.ascent + fallback.descent)) / 2.;
+        assert_close(half_leading_baseline, expected, "half-leading baseline");
+    }
+}
+
+fn layout_with(
+    text: &str,
+    root: LineHeight,
+    distribution: LeadingDistribution,
+    sizing: LineBoxSizing,
+) -> parley::Layout<ColorBrush> {
+    layout(
+        text,
+        Options::new(root, distribution).sizing(sizing),
+        &[],
+        None,
+    )
+}
+
+/// Small text with a large line height, large text with a tight one, and a `text-top` span,
+/// under each distribution.
+#[test]
+fn leading_distribution_mixed_sizes() {
+    let text = "small LARGE top مرحبا and a second line";
+    let mut env = TestEnv::new(test_name!(), None);
+    for (distribution, name) in [
+        (LeadingDistribution::HalfLeading, "half_leading"),
+        (LeadingDistribution::Proportional, "proportional"),
+    ] {
+        let mut builder = env.ranged_builder(text);
+        builder.push_default(LineHeight::FontSizeRelative(1.));
+        builder.push_default(distribution);
+        builder.push(StyleProperty::FontSize(10.), 0..5);
+        builder.push(LineHeight::Absolute(40.), 0..5);
+        builder.push(StyleProperty::FontSize(32.), 6..11);
+        builder.push(LineHeight::Absolute(34.), 6..11);
+        builder.push(StyleProperty::FontSize(10.), 12..15);
+        builder.push(LineHeight::Absolute(40.), 12..15);
+        builder.push(VerticalAlign::TEXT_TOP, 12..15);
+        let mut layout = builder.build(text);
+        layout.break_all_lines(Some(200.));
+        layout.align(Alignment::Start, AlignmentOptions::default());
+        env.with_name(name).check_layout_snapshot(&layout);
+    }
 }

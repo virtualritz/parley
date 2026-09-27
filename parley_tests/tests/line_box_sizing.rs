@@ -4,12 +4,15 @@
 //! Tests for [`LineBoxSizing`].
 
 use parley::{
-    InlineBox, InlineBoxKind, LeadingDistribution, LineBoxSizing, LineHeight, VerticalAlign,
+    Alignment, AlignmentOptions, FontFamily, InlineBox, InlineBoxKind, LeadingDistribution,
+    LineBoxSizing, LineHeight, StyleProperty, VerticalAlign,
 };
 
+use crate::test_name;
+use crate::util::TestEnv;
 use crate::util::line_boxes::{
-    EPSILON, FontExtents, Options, Span, assert_glyphs_on_the_baseline, heights_and_baselines,
-    layout, run_fonts,
+    EPSILON, FontExtents, Options, Span, assert_close, assert_glyphs_on_the_baseline,
+    heights_and_baselines, layout, run_baselines, run_fonts,
 };
 
 /// so its box reaches further below. The baseline is where the 25 span, in Arimo, puts it.
@@ -285,4 +288,145 @@ fn line_box_sizing_largest_line_height_of_a_metrics_relative_span() {
         "line height {height}"
     );
     assert!((baseline - 1.5 * (arimo.ascent + arimo.leading / 2.)).abs() < EPSILON);
+}
+
+/// Boxes added to a line before the line breaker reverts to an earlier break opportunity don't
+/// size the line (see `lines_revert_restores_line_height`).
+#[test]
+fn line_box_sizing_largest_line_height_revert() {
+    // "aaa " fits, the tall "BBBBBBBB" doesn't: its first atoms are added to the first line before
+    // the line breaker reverts to the opportunity after the space.
+    let text = "aaa BBBBBBBB";
+    for distribution in [
+        LeadingDistribution::HalfLeading,
+        LeadingDistribution::Proportional,
+    ] {
+        let layout = layout(
+            text,
+            Options::new(LineHeight::Absolute(16.), distribution)
+                .sizing(LineBoxSizing::LargestLineHeight)
+                .max_advance(Some(60.)),
+            &[Span::new(4..text.len(), "Roboto", 16., 64.)],
+            None,
+        );
+        let heights: Vec<f32> = heights_and_baselines(&layout)
+            .iter()
+            .map(|(height, _)| *height)
+            .collect();
+        assert_eq!(heights, [16., 64.], "{distribution:?}");
+        assert_eq!(
+            layout.get(0).unwrap().text_range(),
+            0..4,
+            "{distribution:?}"
+        );
+    }
+}
+
+/// When quantizing, the line is as tall as the largest line height, and its baseline is a whole
+/// pixel.
+#[test]
+fn line_box_sizing_largest_line_height_quantized() {
+    let text = "arabic مرحبا arimo";
+    let spans = [
+        Span::new(0..17, "Noto Kufi Arabic", 20., 23.),
+        Span::new(17..text.len(), "Arimo", 16., 25.),
+    ];
+    for distribution in [
+        LeadingDistribution::HalfLeading,
+        LeadingDistribution::Proportional,
+    ] {
+        let layout = layout(
+            text,
+            Options::new(LineHeight::Absolute(0.), distribution)
+                .sizing(LineBoxSizing::LargestLineHeight)
+                .quantize(true),
+            &spans,
+            None,
+        );
+        let line = layout.get(0).unwrap();
+        let arimo = run_fonts(&line)[run_fonts(&line).len() - 1];
+        let (height, baseline) = heights_and_baselines(&layout)[0];
+        assert_eq!(height, 25., "{distribution:?}");
+        // The Arimo box, placed as when quantizing: a whole-pixel ascent and a floored leading
+        // above the baseline.
+        let leading_above = match distribution {
+            LeadingDistribution::HalfLeading => {
+                (25. - (arimo.ascent.round() + arimo.descent.round())) / 2.
+            }
+            LeadingDistribution::Proportional => {
+                25. * arimo.above_fraction() - arimo.ascent.round()
+            }
+        };
+        assert_eq!(
+            baseline,
+            arimo.ascent.round() + leading_above.floor(),
+            "{distribution:?}"
+        );
+        assert_glyphs_on_the_baseline(&line);
+    }
+}
+
+/// Spans shifted by `vertical-align` are placed with their shift, and a `top` subtree is sized by
+/// its own largest line height and grows the line box if it is taller.
+#[test]
+fn line_box_sizing_largest_line_height_shifted_and_top_spans() {
+    let text = "base top sup";
+    for (top_line_height, expected_height) in [(10., 30.), (40., 40.)] {
+        let spans = [
+            Span::new(5..8, "Roboto", 16., top_line_height).with_vertical_align(VerticalAlign::TOP),
+            Span::new(9..12, "Roboto", 16., 30.).with_vertical_align(VerticalAlign::SUPER),
+        ];
+        let layout = layout(
+            text,
+            Options::new(LineHeight::Absolute(20.), LeadingDistribution::HalfLeading)
+                .sizing(LineBoxSizing::LargestLineHeight),
+            &spans,
+            None,
+        );
+        let line = layout.get(0).unwrap();
+        let roboto = run_fonts(&line)[0];
+        let (height, baseline) = heights_and_baselines(&layout)[0];
+        let case = format!("top line height {top_line_height}");
+        assert_close(height, expected_height, &case);
+        // The root subtree is sized by the `super` span's box of 30, which is shifted up by a
+        // third of the root's font size.
+        let over = 16. / 3. + roboto.ascent + (30. - (roboto.ascent + roboto.descent)) / 2.;
+        assert_close(baseline, over, &case);
+
+        // The `top` span's box is at the top of the line.
+        let top_baseline = run_baselines(&line)[1] - line.metrics().block_min_coord;
+        let top_over = roboto.ascent + (top_line_height - (roboto.ascent + roboto.descent)) / 2.;
+        assert_close(top_baseline, top_over, &case);
+    }
+}
+
+/// Under half-leading, the small Arimo text with a line height of 30 makes the union taller than
+/// 30; the largest line height makes the first line exactly 30.
+#[test]
+fn line_box_sizing_mixed_fonts() {
+    let text = "Kufi مرحبا Arimo text and a second line";
+    let mut env = TestEnv::new(test_name!(), None);
+    for (sizing, name) in [
+        (LineBoxSizing::Union, "union"),
+        (LineBoxSizing::LargestLineHeight, "largest_line_height"),
+    ] {
+        let mut builder = env.ranged_builder(text);
+        builder.push_default(LineHeight::Absolute(0.));
+        builder.push(StyleProperty::FontSize(24.), 5..15);
+        builder.push(LineHeight::Absolute(24.), 5..15);
+        builder.push(FontFamily::from("Arimo"), 16..21);
+        builder.push(StyleProperty::FontSize(10.), 16..21);
+        builder.push(LineHeight::Absolute(30.), 16..21);
+        builder.push(LineHeight::Absolute(18.), 21..text.len());
+        let mut layout = builder.build(text);
+        layout.set_line_box_sizing(sizing);
+        layout.break_all_lines(Some(200.));
+        layout.align(Alignment::Start, AlignmentOptions::default());
+        let height = layout.get(0).unwrap().metrics().line_height;
+        match sizing {
+            LineBoxSizing::Union => assert!(height > 31., "union line height {height}"),
+            LineBoxSizing::LargestLineHeight => assert_eq!(height, 30.),
+        }
+        env.with_name(name).check_layout_snapshot(&layout);
+    }
 }
