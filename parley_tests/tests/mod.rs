@@ -31,6 +31,8 @@ mod emoji;
 mod exclusions;
 mod floats;
 mod issues;
+mod leading_distribution;
+mod line_box_sizing;
 mod line_break;
 mod linebreaking_matches_chrome;
 mod lines;

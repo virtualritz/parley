@@ -6,6 +6,7 @@
 mod asserts;
 mod cursor_test;
 pub(crate) mod env;
+pub(crate) mod line_boxes;
 mod renderer;
 pub(crate) mod samples;
 
