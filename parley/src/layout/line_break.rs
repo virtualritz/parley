@@ -226,8 +226,8 @@ struct LineBuffers {
 
 /// The lengths of the [`LineBuffers`] at a line-breaking opportunity.
 ///
-/// These are `u32` so that saving an opportunity copies no more than a single length would.
-/// Neither buffer can get that long: each holds at most a few entries per style on the line.
+/// These are `u32`, so that on 64-bit targets both take the space of one `usize`. Neither buffer
+/// gets that long: each holds at most a few entries per style on the line.
 #[derive(Clone, Copy, Debug, Default)]
 struct LineBuffersLen {
     contributed: u32,
@@ -2383,6 +2383,11 @@ fn hanging_whitespace<B: Brush>(
 /// otherwise the style's span box alone sizes the line and this returns `None`. This is decided
 /// by the style of the glyphs rather than by the first character of their run: a style change
 /// that only changes the line height does not split runs, so one run can hold text of both.
+///
+/// An atom's line height is the largest line height of its characters (see
+/// [`LayoutData::line_heights`]). So in an atom whose characters have several styles, such as a
+/// ligature, a style with a `normal` line height gets a box of the atom's line height, not of its
+/// own.
 ///
 /// [CSS Inline 3 § 4.1]: https://drafts.csswg.org/css-inline-3/#inline-height
 #[inline]
