@@ -552,13 +552,12 @@ impl LineBoxMetrics {
     /// This adds the style's span box together with its ancestors, and the box of the segment's
     /// glyphs if the style has one (see [`run_box_metrics`]; the glyph font may be a fallback
     /// font and differ from the style's first available font).
-    #[inline]
+    #[inline(always)]
     fn add_text(
         &mut self,
         item_idx: usize,
         style_index: u16,
-        style_metrics: &[StyleMetrics],
-        segment: RunSegment<'_>,
+        segment: &RunSegment<'_>,
         buffers: &mut LineBuffers,
     ) {
         self.has_content = true;
@@ -567,7 +566,7 @@ impl LineBoxMetrics {
         if self.last_text == (item_idx, style_index) {
             return;
         }
-        self.add_new_text(item_idx, style_index, style_metrics, segment, buffers);
+        self.add_new_text(item_idx, style_index, segment, buffers);
     }
 
     /// The part of [`Self::add_text`] for text whose boxes may not be on the line yet.
@@ -576,28 +575,15 @@ impl LineBoxMetrics {
         &mut self,
         item_idx: usize,
         style_index: u16,
-        style_metrics: &[StyleMetrics],
-        segment: RunSegment<'_>,
+        segment: &RunSegment<'_>,
         buffers: &mut LineBuffers,
     ) {
         match buffers.sizing {
             LineBoxSizing::Union => {
-                self.add_new_text_sized::<false>(
-                    item_idx,
-                    style_index,
-                    style_metrics,
-                    segment,
-                    buffers,
-                );
+                self.add_new_text_sized::<false>(item_idx, style_index, segment, buffers);
             }
             LineBoxSizing::LargestLineHeight => {
-                self.add_new_text_sized::<true>(
-                    item_idx,
-                    style_index,
-                    style_metrics,
-                    segment,
-                    buffers,
-                );
+                self.add_new_text_sized::<true>(item_idx, style_index, segment, buffers);
             }
         }
     }
@@ -609,11 +595,11 @@ impl LineBoxMetrics {
         &mut self,
         item_idx: usize,
         style_index: u16,
-        style_metrics: &[StyleMetrics],
-        segment: RunSegment<'_>,
+        segment: &RunSegment<'_>,
         buffers: &mut LineBuffers,
     ) {
         self.last_text = (item_idx, style_index);
+        let style_metrics = segment.style_metrics;
         if buffers.contributed.last() != Some(&style_index) {
             self.add_style::<LARGEST_LINE_HEIGHT>(style_index, style_metrics, buffers);
         }
@@ -716,9 +702,11 @@ fn atoms_until_line_height_change<'a, B: Brush>(
 }
 
 /// Atoms of a run that all have the same line height, as yielded by
-/// [`atoms_until_line_height_change`]: what [`run_box_metrics`] needs to know about them.
+/// [`atoms_until_line_height_change`]: what adding them to a line needs to know about them.
 #[derive(Clone, Copy, Debug)]
 struct RunSegment<'a> {
+    /// The metrics of the layout's styles.
+    style_metrics: &'a [StyleMetrics],
     /// The metrics of the run's font.
     font_metrics: &'a FontMetrics,
     /// The line height of the atoms.
@@ -927,13 +915,15 @@ impl BreakerState {
     ///
     /// `is_word_separator` is `true` iff the atom is a [word separator](`is_word_separator`), i.e.,
     /// a justification opportunity.
-    #[inline]
+    //
+    // Note: This runs once per atom. Called out of line, or with `segment` passed by value, this
+    // makes breaking long unwrapped lines of Latin text measurably slower (as of writing).
+    #[inline(always)]
     fn append_atom_to_line(
         &mut self,
         atom: &Atom<'_>,
         next_x: f32,
-        style_metrics: &[StyleMetrics],
-        segment: RunSegment<'_>,
+        segment: &RunSegment<'_>,
         is_word_separator: bool,
     ) {
         self.line.items.end = self.item_idx + 1;
@@ -945,7 +935,6 @@ impl BreakerState {
         self.line.box_metrics.add_text(
             self.item_idx,
             characters[0].style_index,
-            style_metrics,
             segment,
             &mut self.buffers,
         );
@@ -956,7 +945,7 @@ impl BreakerState {
             .iter()
             .any(|character| character.style_index != first_style_index)
         {
-            self.add_atom_style_changes(characters, style_metrics, segment);
+            self.add_atom_style_changes(characters, segment);
         }
         self.update_max_height_exceeded();
     }
@@ -964,12 +953,7 @@ impl BreakerState {
     /// Add the text of each style change within the `characters` of an atom (see
     /// [`Self::append_atom_to_line`]), whose first character's text has already been added.
     #[inline(never)]
-    fn add_atom_style_changes(
-        &mut self,
-        characters: &[Character],
-        style_metrics: &[StyleMetrics],
-        segment: RunSegment<'_>,
-    ) {
+    fn add_atom_style_changes(&mut self, characters: &[Character], segment: &RunSegment<'_>) {
         let mut style_index = characters[0].style_index;
         for character in &characters[1..] {
             if character.style_index != style_index {
@@ -977,7 +961,6 @@ impl BreakerState {
                 self.line.box_metrics.add_text(
                     self.item_idx,
                     style_index,
-                    style_metrics,
                     segment,
                     &mut self.buffers,
                 );
@@ -1458,6 +1441,7 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                         self.state.cluster_idx,
                     );
                     let segment = RunSegment {
+                        style_metrics: &self.layout.data.style_metrics,
                         font_metrics: &self.layout.data.shaped_text.runs()[run_idx].font_metrics,
                         line_height,
                         quantize: self.layout.data.quantize,
@@ -1491,8 +1475,7 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                             self.state.append_atom_to_line(
                                 &atom,
                                 self.state.line.x,
-                                &self.layout.data.style_metrics,
-                                segment,
+                                &segment,
                                 is_separator,
                             );
 
@@ -1534,13 +1517,8 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                             if max_height_exceeded {
                                 return self.max_height_break_data(line_height);
                             }
-                            self.state.append_atom_to_line(
-                                &atom,
-                                next_x,
-                                &self.layout.data.style_metrics,
-                                segment,
-                                is_separator,
-                            );
+                            self.state
+                                .append_atom_to_line(&atom, next_x, &segment, is_separator);
                         }
                         // Else we attempt to line break:
                         //
@@ -1565,8 +1543,7 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                                 self.state.append_atom_to_line(
                                     &atom,
                                     next_x,
-                                    &self.layout.data.style_metrics,
-                                    segment,
+                                    &segment,
                                     is_separator,
                                 );
                             }
@@ -1609,8 +1586,7 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                                 self.state.append_atom_to_line(
                                     &atom,
                                     next_x,
-                                    &self.layout.data.style_metrics,
-                                    segment,
+                                    &segment,
                                     is_separator,
                                 );
                             }
@@ -1713,6 +1689,7 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                         self.state.cluster_idx,
                     );
                     let segment = RunSegment {
+                        style_metrics: &self.layout.data.style_metrics,
                         font_metrics: &self.layout.data.shaped_text.runs()[run_idx].font_metrics,
                         line_height,
                         quantize: self.layout.data.quantize,
@@ -1739,13 +1716,8 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                         } else {
                             self.state.line.x + advance
                         };
-                        self.state.append_atom_to_line(
-                            &atom,
-                            next_x,
-                            &self.layout.data.style_metrics,
-                            segment,
-                            is_separator,
-                        );
+                        self.state
+                            .append_atom_to_line(&atom, next_x, &segment, is_separator);
                         char_count += atom.char_range().len() as u32;
 
                         // Check if we've reached the limit after adding this atom
@@ -1890,6 +1862,7 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                 let line_height =
                     self.layout.data.line_heights[line_heights.end as usize - 1].line_height;
                 let segment = RunSegment {
+                    style_metrics: &self.layout.data.style_metrics,
                     font_metrics: &self.layout.data.shaped_text.runs()[index].font_metrics,
                     line_height,
                     quantize: self.layout.data.quantize,
@@ -1898,8 +1871,7 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                 self.state.line.box_metrics.add_text(
                     index,
                     style_index,
-                    &self.layout.data.style_metrics,
-                    segment,
+                    &segment,
                     &mut self.state.buffers,
                 );
                 line.metrics.line_height =
@@ -2391,7 +2363,7 @@ fn hanging_whitespace<B: Brush>(
 ///
 /// [CSS Inline 3 § 4.1]: https://drafts.csswg.org/css-inline-3/#inline-height
 #[inline]
-fn run_box_metrics(metrics: &StyleMetrics, segment: RunSegment<'_>) -> Option<BoxMetrics> {
+fn run_box_metrics(metrics: &StyleMetrics, segment: &RunSegment<'_>) -> Option<BoxMetrics> {
     metrics.line_height_is_normal.then(|| {
         BoxMetrics::from_font(
             segment.font_metrics,
