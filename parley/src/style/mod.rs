@@ -106,6 +106,42 @@ impl LineHeight {
     }
 }
 
+/// How a span's leading is distributed above and below its text.
+///
+/// The leading is the difference between the span's resolved [`LineHeight`] and the ascent plus
+/// descent of its font. The distribution places the span's line-height box around its baseline,
+/// which decides how the span sizes its line.
+///
+/// With [`HalfLeading`](Self::HalfLeading), a smaller font with a relatively larger line height can
+/// reach further below the baseline than a larger font's box, making the line taller than any of
+/// its line heights. With [`Proportional`](Self::Proportional), boxes of one font extend the same
+/// fraction of their line height above the baseline, so spans in one font make a line as tall as
+/// the largest of their line heights.
+///
+/// The `vertical-align` values that align a span by its line-height box also depend on the
+/// distribution: [`VerticalAlign::TEXT_TOP`], [`VerticalAlign::TEXT_BOTTOM`] and
+/// [`VerticalAlign::MIDDLE`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum LeadingDistribution {
+    /// Half of the leading above the text and half below it, as in
+    /// [CSS 2.2 § 10.8.1][css-leading].
+    ///
+    /// This is Skia's paragraph layout with `TextStyle::setHalfLeading(true)`, and Flutter's
+    /// `TextLeadingDistribution.even`.
+    ///
+    /// [css-leading]: https://www.w3.org/TR/CSS22/visudet.html#leading
+    #[default]
+    HalfLeading,
+    /// The leading split in the ratio of the font's ascent to its descent: the box extends
+    /// `line_height * ascent / (ascent + descent)` above the baseline and the rest of the line
+    /// height below it. The font's line gap is added half to the ascent and half to the descent
+    /// first.
+    ///
+    /// This is Skia's paragraph layout with `TextStyle::setHalfLeading(false)`, the default, and
+    /// Flutter's `TextLeadingDistribution.proportional`.
+    Proportional,
+}
+
 /// Which reference of a span (or [`InlineBox`]) is aligned with the same reference of its
 /// *parent* span (the enclosing style span, or the root style for top-level content). Mirrors the
 /// CSS `alignment-baseline` property.
@@ -259,6 +295,8 @@ pub enum StyleProperty<'a, B: Brush> {
     StrikethroughBrush(Option<B>),
     /// Line height.
     LineHeight(LineHeight),
+    /// Distribution of the leading around the text.
+    LeadingDistribution(LeadingDistribution),
     /// Vertical alignment within the line.
     VerticalAlign(VerticalAlign),
     /// Extra spacing between words.
@@ -314,6 +352,8 @@ pub struct TextStyle<'family, 'settings, B: Brush> {
     pub strikethrough_brush: Option<B>,
     /// Line height.
     pub line_height: LineHeight,
+    /// Distribution of the leading around the text.
+    pub leading_distribution: LeadingDistribution,
     /// Vertical alignment within the line.
     pub vertical_align: VerticalAlign,
     /// Extra spacing between words.
@@ -351,6 +391,7 @@ impl<B: Brush> Default for TextStyle<'static, 'static, B> {
             strikethrough_size: None,
             strikethrough_brush: None,
             line_height: LineHeight::default(),
+            leading_distribution: LeadingDistribution::default(),
             vertical_align: VerticalAlign::default(),
             word_spacing: 0.0,
             letter_spacing: 0.0,
@@ -401,6 +442,12 @@ impl<B: Brush> From<GenericFamily> for StyleProperty<'_, B> {
 impl<B: Brush> From<LineHeight> for StyleProperty<'_, B> {
     fn from(value: LineHeight) -> Self {
         StyleProperty::LineHeight(value)
+    }
+}
+
+impl<B: Brush> From<LeadingDistribution> for StyleProperty<'_, B> {
+    fn from(value: LeadingDistribution) -> Self {
+        StyleProperty::LeadingDistribution(value)
     }
 }
 

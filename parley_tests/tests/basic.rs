@@ -7,8 +7,8 @@ use crate::util::TestEnv;
 use crate::{test_name, util::ColorBrush};
 use parley::{
     Alignment, AlignmentOptions, BreakReason, ContentWidths, FontFamily, FontWeight, InlineBox,
-    InlineBoxKind, Layout, LineHeight, PositionedLayoutItem, RangedBuilder, StyleProperty,
-    TextStyle, TextWrapMode, VerticalAlign, WhiteSpaceCollapse,
+    InlineBoxKind, Layout, LeadingDistribution, LineHeight, PositionedLayoutItem, RangedBuilder,
+    StyleProperty, TextStyle, TextWrapMode, VerticalAlign, WhiteSpaceCollapse,
 };
 use peniko::color::{AlphaColor, Srgb, palette};
 use peniko::kurbo::Size;
@@ -1286,6 +1286,16 @@ fn shaping_line_height_change_is_not_a_shaping_boundary() {
     let mut env = TestEnv::new(test_name!(), None);
     assert_not_a_shaping_boundary(&mut env, |builder, range| {
         builder.push(LineHeight::Absolute(40.), range);
+    });
+}
+
+/// Like a line height, a leading distribution doesn't affect shaping, so a style change that
+/// only changes the leading distribution is not a shaping boundary either.
+#[test]
+fn shaping_leading_distribution_change_is_not_a_shaping_boundary() {
+    let mut env = TestEnv::new(test_name!(), None);
+    assert_not_a_shaping_boundary(&mut env, |builder, range| {
+        builder.push(LeadingDistribution::Proportional, range);
     });
 }
 

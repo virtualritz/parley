@@ -3,5 +3,6 @@
 
 mod test_analysis;
 mod test_builders;
+mod test_leading_distribution;
 mod test_style_metrics;
 mod utils;

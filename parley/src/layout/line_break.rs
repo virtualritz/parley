@@ -2108,8 +2108,9 @@ fn hanging_whitespace<B: Brush>(
 
 /// The inline box of the glyphs of `segment` of a style with `metrics`: the box of the segment's
 /// font (which may be a fallback font and differ from the style's first available font) expanded
-/// to the segment's line height. Each of the segment's atoms adds it to a line's extents, for
-/// each style of the atom's characters.
+/// to the segment's line height, with the leading distributed by the style's
+/// [`LeadingDistribution`](crate::LeadingDistribution). Each of the segment's atoms adds it to a
+/// line's extents, for each style of the atom's characters.
 ///
 /// Per [CSS Inline 3 § 4.1], glyphs from fonts other than the first available font only
 /// contribute to the line when the `line-height` is `normal` ([`LineHeight::MetricsRelative`](crate::LineHeight::MetricsRelative));
@@ -2125,9 +2126,14 @@ fn hanging_whitespace<B: Brush>(
 /// [CSS Inline 3 § 4.1]: https://drafts.csswg.org/css-inline-3/#inline-height
 #[inline]
 fn run_box_metrics(metrics: &StyleMetrics, segment: &RunSegment<'_>) -> Option<BoxMetrics> {
-    metrics
-        .line_height_is_normal
-        .then(|| BoxMetrics::from_font(segment.font_metrics, segment.line_height, segment.quantize))
+    metrics.line_height_is_normal.then(|| {
+        BoxMetrics::from_font(
+            segment.font_metrics,
+            segment.line_height,
+            metrics.leading_distribution,
+            segment.quantize,
+        )
+    })
 }
 
 /// Reorder items within line according to the bidi levels of the items
