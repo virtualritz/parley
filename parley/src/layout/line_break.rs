@@ -21,6 +21,7 @@ use crate::layout::{
     LineItemData, LineMetrics, Run,
 };
 use crate::style::Brush;
+use crate::util::nearly_eq;
 use crate::{
     BaselineShift, InlineBox, InlineBoxKind, LineHeight, OverflowWrap, TextWrapMode, VerticalAlign,
     WhiteSpaceCollapse,
@@ -183,8 +184,11 @@ impl TallestBox {
     fn add(&mut self, line_height: f32, baseline_offset: f32, over: f32, under: f32) -> bool {
         let over = baseline_offset + over;
         let under = under - baseline_offset;
-        let replaces =
-            line_height > self.line_height || (line_height == self.line_height && over > self.over);
+        let replaces = if nearly_eq(line_height, self.line_height) {
+            over > self.over
+        } else {
+            line_height > self.line_height
+        };
         if replaces {
             *self = Self {
                 line_height,
