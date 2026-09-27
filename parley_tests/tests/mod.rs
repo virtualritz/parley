@@ -38,6 +38,7 @@ mod linebreaking_matches_chrome;
 mod lines;
 mod out_of_flow_boxes;
 mod styles;
+mod text_align_last;
 mod text_indent;
 mod whitespace;
 mod wrap;

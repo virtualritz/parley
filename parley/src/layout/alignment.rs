@@ -27,6 +27,11 @@ pub enum Alignment {
     /// [`Alignment::End`] instead.
     Right,
     /// Justify each line by spacing out content, except for the last line.
+    ///
+    /// The last line of a paragraph and each line ending in a hard break are aligned by
+    /// [`AlignmentOptions::last_line_alignment`], and start aligned by default.
+    ///
+    /// A line with no justification opportunity, such as a single long word, is start aligned.
     Justify,
 }
 
@@ -37,6 +42,20 @@ pub struct AlignmentOptions {
     /// wider than the alignment width. If it is set to `false`, all overflowing lines will be
     /// [`Alignment::Start`] aligned.
     pub align_when_overflowing: bool,
+    /// The alignment of the last line of the paragraph and of each line ending in a hard break,
+    /// as the CSS `text-align-last` property ([CSS Text 3 § 6.3][css-text-align-last]).
+    ///
+    /// `None` corresponds to `auto`: these lines are aligned like the other lines, except that
+    /// under [`Alignment::Justify`] they are start aligned. `Some(alignment)` aligns them with
+    /// `alignment`, whatever the alignment of the other lines.
+    ///
+    /// A line with no justification opportunity is start aligned when it would be justified.
+    /// [CSS Text 3 § 6.4.3][css-justify-limits] aligns such a line by `text-align-last` instead,
+    /// and as for `center` if that is `justify`.
+    ///
+    /// [css-text-align-last]: https://www.w3.org/TR/css-text-3/#text-align-last-property
+    /// [css-justify-limits]: https://www.w3.org/TR/css-text-3/#justify-limits
+    pub last_line_alignment: Option<Alignment>,
 }
 
 #[expect(
@@ -47,6 +66,7 @@ impl Default for AlignmentOptions {
     fn default() -> Self {
         Self {
             align_when_overflowing: false,
+            last_line_alignment: None,
         }
     }
 }
@@ -88,7 +108,15 @@ pub(crate) fn align<B: Brush>(
             continue;
         }
 
-        match (alignment, is_rtl) {
+        // The paragraph's last line (`BreakReason::None`) and lines ending in a hard break
+        // (`BreakReason::Explicit`).
+        let is_last_line = matches!(line.break_reason, BreakReason::None | BreakReason::Explicit);
+        let line_alignment = match options.last_line_alignment {
+            Some(last_line_alignment) if is_last_line => last_line_alignment,
+            _ => alignment,
+        };
+
+        match (line_alignment, is_rtl) {
             (Alignment::Left, _) | (Alignment::Start, false) | (Alignment::End, true) => {
                 // Do nothing
             }
@@ -104,11 +132,10 @@ pub(crate) fn align<B: Brush>(
                     continue;
                 }
 
-                // Justified alignment doesn't apply to the last line of a paragraph
-                // (`BreakReason::None`), (`BreakReason::Explicit`) or if there are no whitespace
-                // gaps to adjust. In that case, start-align, i.e., left-align for LTR text and
-                // right-align for RTL text.
-                if matches!(line.break_reason, BreakReason::None | BreakReason::Explicit)
+                // Justified alignment doesn't apply to last lines unless `last_line_alignment`
+                // asks for it, or if there are no whitespace gaps to adjust. In that case,
+                // start-align, i.e., left-align for LTR text and right-align for RTL text.
+                if (is_last_line && options.last_line_alignment.is_none())
                     || line.num_justification_opportunities == 0
                 {
                     if is_rtl {
