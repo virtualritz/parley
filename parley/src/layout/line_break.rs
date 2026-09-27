@@ -392,12 +392,15 @@ impl Default for LineBoxMetrics {
             line_relative_top_height: 0.,
             line_relative_bottom_height: 0.,
             has_content: false,
-            last_text: (usize::MAX, 0),
+            last_text: Self::NO_TEXT,
         }
     }
 }
 
 impl LineBoxMetrics {
+    /// The [`Self::last_text`] of a line to which no text has been added.
+    const NO_TEXT: (usize, u16) = (usize::MAX, 0);
+
     /// Reset to an empty line sized by `sizing`, whose root aligned subtree contains only `strut`,
     /// if any.
     fn reset(
@@ -407,22 +410,22 @@ impl LineBoxMetrics {
         buffers: &mut LineBuffers,
     ) {
         let Self {
-            subtrees: _,
+            subtrees,
             line_relative_top_height,
             line_relative_bottom_height,
             has_content,
             last_text,
-        } = Self::default();
+        } = self;
         // Keep only an empty root subtree, which is always the first, rather than rebuilding the
         // list for each line.
-        self.subtrees.truncate(1);
-        self.subtrees[0] = SubtreeExtents::new(0);
+        subtrees.truncate(1);
+        subtrees[0] = SubtreeExtents::new(0);
+        *line_relative_top_height = 0.;
+        *line_relative_bottom_height = 0.;
+        *has_content = false;
+        *last_text = Self::NO_TEXT;
         buffers.clear();
         buffers.sizing = sizing;
-        self.line_relative_top_height = line_relative_top_height;
-        self.line_relative_bottom_height = line_relative_bottom_height;
-        self.has_content = has_content;
-        self.last_text = last_text;
         if let Some(strut) = strut {
             self.add_strut(strut, buffers);
         }
@@ -637,7 +640,7 @@ impl LineBoxMetrics {
     /// this is called whenever the line breaker moves to another line height.
     #[inline]
     fn forget_last_text(&mut self) {
-        self.last_text = Self::default().last_text;
+        self.last_text = Self::NO_TEXT;
     }
 
     /// Add an inline box extending `ascent` above and `descent` below a baseline that is
