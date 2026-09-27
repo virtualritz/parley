@@ -106,26 +106,30 @@ impl LineHeight {
     }
 }
 
-/// How a span's leading is distributed above and below its text. The leading is the difference
-/// between the span's resolved [`LineHeight`] and the ascent plus descent of its font.
+/// How a span's leading is distributed above and below its text.
 ///
-/// Each span's line-height expanded box is aligned on the baseline with the other boxes on its
-/// line. By default ([`LineBoxSizing::Union`](crate::LineBoxSizing::Union)) the line box is their
-/// union, whichever distribution is used. With
-/// [`HalfLeading`](Self::HalfLeading), a smaller font with a relatively larger line height can
+/// The leading is the difference between the span's resolved [`LineHeight`] and the ascent plus
+/// descent of its font. The distribution places the span's line-height box around its baseline,
+/// which decides how the span sizes its line (see [`LineBoxSizing`](crate::LineBoxSizing)).
+///
+/// With [`HalfLeading`](Self::HalfLeading), a smaller font with a relatively larger line height can
 /// reach further below the baseline than a larger font's box, making the line taller than any of
-/// its line heights. With [`Proportional`](Self::Proportional), every box of one font extends the
-/// same fraction of its line height above the baseline, so spans in one font make a line exactly
-/// as tall as the largest of their line heights, whatever their font sizes. Spans in fonts with
-/// different ascent to descent ratios can still make it taller;
-/// [`LineBoxSizing::LargestLineHeight`](crate::LineBoxSizing::LargestLineHeight) sizes each line
-/// by its largest line height alone.
+/// its line heights. With [`Proportional`](Self::Proportional), boxes of one font extend the same
+/// fraction of their line height above the baseline, so spans in one font make a line as tall as
+/// the largest of their line heights.
+///
+/// The `vertical-align` values that align a span by its line-height box also depend on the
+/// distribution: [`VerticalAlign::TEXT_TOP`], [`VerticalAlign::TEXT_BOTTOM`] and
+/// [`VerticalAlign::MIDDLE`].
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum LeadingDistribution {
-    /// Half of the leading above the text and half below it: CSS half-leading (CSS 2 § 10.8.1).
+    /// Half of the leading above the text and half below it, as in
+    /// [CSS 2.2 § 10.8.1][css-leading].
     ///
     /// This is Skia's paragraph layout with `TextStyle::setHalfLeading(true)`, and Flutter's
     /// `TextLeadingDistribution.even`.
+    ///
+    /// [css-leading]: https://www.w3.org/TR/CSS22/visudet.html#leading
     #[default]
     HalfLeading,
     /// The leading split in the ratio of the font's ascent to its descent: the box extends
@@ -133,9 +137,8 @@ pub enum LeadingDistribution {
     /// height below it. The font's line gap is added half to the ascent and half to the descent
     /// first.
     ///
-    /// This is how Skia's paragraph layout distributes a line height by default (with
-    /// `TextStyle::setHalfLeading(false)`), and Flutter's
-    /// `TextLeadingDistribution.proportional`.
+    /// This is Skia's paragraph layout with `TextStyle::setHalfLeading(false)`, the default, and
+    /// Flutter's `TextLeadingDistribution.proportional`.
     Proportional,
 }
 
