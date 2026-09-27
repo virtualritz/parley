@@ -111,7 +111,7 @@ impl LineState {
 /// See <https://www.w3.org/TR/CSS22/visudet.html#line-height>.
 ///
 /// [aligned subtree]: crate::layout::style_metrics#aligned-subtrees
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct LineBoxMetrics {
     /// Extents of each aligned subtree with content on this line. The first entry is always the
     /// root subtree (root style index `0`).
@@ -208,6 +208,21 @@ impl SubtreeExtents {
     }
 }
 
+impl Clone for LineBoxMetrics {
+    /// The line state is copied at every line-breaking opportunity. The aligned subtrees are
+    /// `Copy`, so copy them as a slice rather than cloning them one by one.
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            subtrees: SmallVec::from_slice(&self.subtrees),
+            line_relative_top_height: self.line_relative_top_height,
+            line_relative_bottom_height: self.line_relative_bottom_height,
+            has_content: self.has_content,
+            last_text: self.last_text,
+        }
+    }
+}
+
 impl Default for LineBoxMetrics {
     /// An empty line containing only the root aligned subtree, without a strut.
     fn default() -> Self {
@@ -218,12 +233,15 @@ impl Default for LineBoxMetrics {
             line_relative_top_height: 0.,
             line_relative_bottom_height: 0.,
             has_content: false,
-            last_text: (usize::MAX, 0),
+            last_text: Self::NO_TEXT,
         }
     }
 }
 
 impl LineBoxMetrics {
+    /// The [`Self::last_text`] of a line to which no text has been added.
+    const NO_TEXT: (usize, u16) = (usize::MAX, 0);
+
     /// Reset to an empty line whose root aligned subtree contains only `strut`, if any.
     fn reset(&mut self, strut: Option<&StyleMetrics>, contributed: &mut Vec<u16>) {
         let Self {
@@ -232,14 +250,16 @@ impl LineBoxMetrics {
             line_relative_bottom_height,
             has_content,
             last_text,
-        } = Self::default();
-        self.subtrees.clear();
-        self.subtrees.extend(subtrees);
+        } = self;
+        // Keep only an empty root subtree, which is always the first, rather than rebuilding the
+        // list for each line.
+        subtrees.truncate(1);
+        subtrees[0] = SubtreeExtents::new(0);
+        *line_relative_top_height = 0.;
+        *line_relative_bottom_height = 0.;
+        *has_content = false;
+        *last_text = Self::NO_TEXT;
         contributed.clear();
-        self.line_relative_top_height = line_relative_top_height;
-        self.line_relative_bottom_height = line_relative_bottom_height;
-        self.has_content = has_content;
-        self.last_text = last_text;
         if let Some(strut) = strut {
             self.add_strut(strut, contributed);
         }
@@ -373,7 +393,7 @@ impl LineBoxMetrics {
     /// this is called whenever the line breaker moves to another line height.
     #[inline]
     fn forget_last_text(&mut self) {
-        self.last_text = Self::default().last_text;
+        self.last_text = Self::NO_TEXT;
     }
 
     /// Add an inline box extending `ascent` above and `descent` below a baseline that is
@@ -534,7 +554,6 @@ pub struct BoxBreakData {
     pub advance: f32,
 }
 
-#[derive(Clone)]
 /// The mutable state of the line breaker.
 ///
 /// This is exposed so that callers using [`BreakLines`] directly can inspect and
@@ -585,6 +604,49 @@ pub struct BreakerState {
     prev_boundary: Option<PrevBoundaryState>,
     /// Saved breaker state for the last emergency line-breaking opportunity
     emergency_boundary: Option<PrevBoundaryState>,
+}
+
+impl Clone for BreakerState {
+    fn clone(&self) -> Self {
+        let mut clone = Self::default();
+        clone.clone_from(self);
+        clone
+    }
+
+    /// Reuses the allocation of `contributed`, as [`BreakLines`] saves its state with
+    /// `clone_from` for every line.
+    fn clone_from(&mut self, source: &Self) {
+        let Self {
+            items,
+            lines,
+            item_idx,
+            run_idx,
+            cluster_idx,
+            line_x,
+            line_y,
+            layout_max_advance,
+            line_max_advance,
+            line_max_height,
+            line,
+            contributed,
+            prev_boundary,
+            emergency_boundary,
+        } = source;
+        self.items = *items;
+        self.lines = *lines;
+        self.item_idx = *item_idx;
+        self.run_idx = *run_idx;
+        self.cluster_idx = *cluster_idx;
+        self.line_x = *line_x;
+        self.line_y = *line_y;
+        self.layout_max_advance = *layout_max_advance;
+        self.line_max_advance = *line_max_advance;
+        self.line_max_height = *line_max_height;
+        self.line.clone_from(line);
+        self.contributed.clone_from(contributed);
+        self.prev_boundary.clone_from(prev_boundary);
+        self.emergency_boundary.clone_from(emergency_boundary);
+    }
 }
 
 impl Default for BreakerState {
