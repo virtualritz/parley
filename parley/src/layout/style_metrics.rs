@@ -215,7 +215,7 @@ impl BoxMetrics {
     /// The box of `font` expanded to `line_height`, with the leading distributed by
     /// `distribution`.
     ///
-    /// [`LeadingDistribution::HalfLeading`] distributes the half-leading as in CSS 2 §10.8.1.
+    /// [`LeadingDistribution::HalfLeading`] distributes the half-leading as in CSS 2.2 § 10.8.1.
     /// [`LeadingDistribution::Proportional`] splits the line height in the ratio of the font's
     /// ascent to its descent, each with half of the font's line gap added, as Skia does. With
     /// `quantize`, ascent and descent are rounded to whole pixels and the leading above the

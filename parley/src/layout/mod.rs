@@ -117,27 +117,30 @@ pub struct IndentOptions {
 
 /// How the line-height boxes of the spans on a line size its line box.
 ///
-/// Every span on a line (the root style's strut, each style with text on the line, and the
-/// styles enclosing them) generates a box of its resolved [`LineHeight`], placed around its
-/// baseline by its [`LeadingDistribution`].
+/// Every span on a line (the root style, each style with text on the line, and the styles
+/// enclosing them) generates a box of its resolved [`LineHeight`], placed around its baseline by
+/// its [`LeadingDistribution`]. The glyphs of a style with a `normal` line height
+/// ([`LineHeight::MetricsRelative`]) also generate a box of their font, which may be a fallback
+/// font, and these boxes size the line box too.
 #[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
 pub enum LineBoxSizing {
-    /// The line box is the union of the span boxes aligned on their baselines, as in CSS 2
-    /// § 10.8.1.
+    /// The line box is the union of the boxes aligned on their baselines, as in
+    /// [CSS 2.2 § 10.8.1][css-leading].
     ///
     /// A span can make the line taller than any line height on it: a smaller font with a
     /// relatively larger line height under
     /// [`HalfLeading`](crate::LeadingDistribution::HalfLeading), or fonts of different ascent to
     /// descent ratios under [`Proportional`](crate::LeadingDistribution::Proportional).
+    ///
+    /// [css-leading]: https://www.w3.org/TR/CSS22/visudet.html#leading
     #[default]
     Union,
-    /// The line box is the box of the span with the largest line height, so the line is exactly
-    /// as tall as the largest line height on it, whatever the fonts and font sizes of its spans.
-    /// Its baseline is where that span's leading distribution puts it. Of spans with the same line
-    /// height, the one whose box reaches furthest above the baseline sizes the line, so there is
-    /// room for the tallest of their ascents.
+    /// The line box is the box with the largest line height, so the line is exactly as tall as
+    /// the largest line height on it, whatever the fonts and font sizes of its spans. Its baseline
+    /// is where that box's leading distribution puts it. Of boxes with the same line height, the
+    /// one reaching furthest above the baseline sizes the line.
     ///
-    /// The other spans' glyphs may reach outside the line box; their content box still counts
+    /// The other boxes' glyphs may reach outside the line box; their content box still counts
     /// towards [`LineMetrics::content_block_min_coord`] and
     /// [`LineMetrics::content_block_max_coord`]. [`InlineBox`](crate::InlineBox)es are objects
     /// rather than text and still grow the line box to fit. The rule applies within each aligned
