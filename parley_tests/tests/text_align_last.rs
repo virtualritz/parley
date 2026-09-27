@@ -21,16 +21,29 @@ fn build_layout(
     alignment: Alignment,
     last_line_alignment: Option<Alignment>,
 ) -> Layout<ColorBrush> {
-    let builder = env.ranged_builder(text);
-    let mut layout = builder.build(text);
-    layout.break_all_lines(Some(width));
-    layout.align(
+    build_layout_with_options(
+        env,
+        text,
+        width,
         alignment,
         AlignmentOptions {
             last_line_alignment,
             ..AlignmentOptions::default()
         },
-    );
+    )
+}
+
+fn build_layout_with_options(
+    env: &mut TestEnv,
+    text: &str,
+    width: f32,
+    alignment: Alignment,
+    options: AlignmentOptions,
+) -> Layout<ColorBrush> {
+    let builder = env.ranged_builder(text);
+    let mut layout = builder.build(text);
+    layout.break_all_lines(Some(width));
+    layout.align(alignment, options);
     layout
 }
 
@@ -123,6 +136,8 @@ fn text_align_last_justify_right() {
     assert_fills(extents[1], width, 1);
     assert!(extents[2].0 > 1.0, "{extents:?}");
     assert_close(extents[2].1, width, "line 2 right edge");
+
+    env.check_layout_snapshot(&layout);
 }
 
 #[test]
@@ -142,6 +157,8 @@ fn text_align_last_justify_justifies_last_line() {
     for (i, extent) in extents.into_iter().enumerate() {
         assert_fills(extent, width, i);
     }
+
+    env.check_layout_snapshot(&layout);
 }
 
 #[test]
@@ -172,6 +189,8 @@ fn text_align_last_none_is_start() {
     assert_fills(extents[1], width, 1);
     assert_close(extents[2].0, 0.0, "line 2 left edge");
     assert!(extents[2].1 < width - 1.0, "{extents:?}");
+
+    env.check_layout_snapshot(&none_layout);
 }
 
 #[test]
@@ -203,6 +222,8 @@ fn text_align_last_hard_break() {
     assert_centered(extents[1], width, 1);
     assert_fills(extents[2], width, 2);
     assert_centered(extents[3], width, 3);
+
+    env.check_layout_snapshot(&layout);
 }
 
 #[test]
@@ -282,6 +303,8 @@ fn text_align_last_without_justify() {
     }
     assert!(extents[2].0 > 1.0, "{extents:?}");
     assert_close(extents[2].1, width, "line 2 right edge");
+
+    env.check_layout_snapshot(&layout);
 }
 
 /// A line with no justification opportunity is start aligned: a line that isn't a last line
@@ -310,6 +333,7 @@ fn text_align_last_unjustifiable_line_is_start_aligned() {
     assert_close(extents[0].0, 0.0, "line 0 left edge");
     assert!(extents[0].1 < width - 1.0, "{extents:?}");
     assert_centered(extents[1], width, 1);
+    env.with_name("center").check_layout_snapshot(&layout);
 
     let layout = build_layout(
         &mut env,
@@ -324,4 +348,87 @@ fn text_align_last_unjustifiable_line_is_start_aligned() {
         assert_close(extent.0, 0.0, &format!("line {i} left edge"));
         assert!(extent.1 < width - 1.0, "line {i}: {extent:?}");
     }
+    env.with_name("justify").check_layout_snapshot(&layout);
+}
+
+/// Overflowing last lines are start aligned, unless `align_when_overflowing` is set.
+#[test]
+fn text_align_last_overflowing() {
+    let mut env = TestEnv::new(test_name!(), None);
+    let width = 120.0;
+    let text = "The quick brown fox Incomprehensibilities";
+
+    for (last_line_alignment, name) in [
+        (Some(Alignment::Center), "center"),
+        (Some(Alignment::Right), "right"),
+        (Some(Alignment::Justify), "justify"),
+    ] {
+        let layout = build_layout(
+            &mut env,
+            text,
+            width,
+            Alignment::Justify,
+            last_line_alignment,
+        );
+        let extents = content_extents(&layout);
+        let last = extents.len() - 1;
+        assert_eq!(
+            layout.lines().last().unwrap().break_reason(),
+            BreakReason::None
+        );
+        assert!(extents[last].1 > width + 1.0, "{extents:?}");
+        assert_close(
+            extents[last].0,
+            0.0,
+            &format!("{name}: last line left edge"),
+        );
+    }
+
+    let options = |last_line_alignment| AlignmentOptions {
+        align_when_overflowing: true,
+        last_line_alignment,
+    };
+
+    let layout = build_layout_with_options(
+        &mut env,
+        text,
+        width,
+        Alignment::Justify,
+        options(Some(Alignment::Center)),
+    );
+    let extents = content_extents(&layout);
+    let last = extents.len() - 1;
+    assert!(extents[last].0 < -1.0, "{extents:?}");
+    assert_close(
+        extents[last].0,
+        width - extents[last].1,
+        "last line free space",
+    );
+    env.with_name("center").check_layout_snapshot(&layout);
+
+    let layout = build_layout_with_options(
+        &mut env,
+        text,
+        width,
+        Alignment::Justify,
+        options(Some(Alignment::Right)),
+    );
+    let extents = content_extents(&layout);
+    let last = extents.len() - 1;
+    assert!(extents[last].0 < -1.0, "{extents:?}");
+    assert_close(extents[last].1, width, "last line right edge");
+    env.with_name("right").check_layout_snapshot(&layout);
+
+    // Justification doesn't apply to overflowing lines.
+    let layout = build_layout_with_options(
+        &mut env,
+        text,
+        width,
+        Alignment::Justify,
+        options(Some(Alignment::Justify)),
+    );
+    let extents = content_extents(&layout);
+    let last = extents.len() - 1;
+    assert_close(extents[last].0, 0.0, "last line left edge");
+    assert!(extents[last].1 > width + 1.0, "{extents:?}");
 }

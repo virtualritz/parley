@@ -31,8 +31,7 @@ pub enum Alignment {
     /// The last line of a paragraph and each line ending in a hard break are aligned by
     /// [`AlignmentOptions::last_line_alignment`], and start aligned by default.
     ///
-    /// A line with no justification opportunity, such as a single long word, can't be spaced
-    /// out and is start aligned.
+    /// A line with no justification opportunity, such as a single long word, is start aligned.
     Justify,
 }
 
@@ -43,18 +42,19 @@ pub struct AlignmentOptions {
     /// wider than the alignment width. If it is set to `false`, all overflowing lines will be
     /// [`Alignment::Start`] aligned.
     pub align_when_overflowing: bool,
-    /// The alignment of last lines, modelled on the CSS `text-align-last` property.
+    /// The alignment of the last line of the paragraph and of each line ending in a hard break,
+    /// as the CSS `text-align-last` property ([CSS Text 3 § 6.3][css-text-align-last]).
     ///
-    /// The last lines are the last line of the paragraph and each line ending in a hard break.
-    /// `None` is CSS `auto`: they are aligned like the other lines, except that under
-    /// [`Alignment::Justify`] they are start aligned. `Some(alignment)` aligns them with
-    /// `alignment`, whatever the alignment of the other lines; `Some(Alignment::Justify)`
-    /// justifies them too.
+    /// `None` corresponds to `auto`: these lines are aligned like the other lines, except that
+    /// under [`Alignment::Justify`] they are start aligned. `Some(alignment)` aligns them with
+    /// `alignment`, whatever the alignment of the other lines.
     ///
-    /// Lines with no justification opportunity are start aligned, whether or not they are last
-    /// lines: this applies to the other lines under [`Alignment::Justify`], and to last lines
-    /// under `Some(Alignment::Justify)`. CSS aligns them by `text-align-last` instead (centred if
-    /// that is `justify`); browsers and Skia start align them.
+    /// A line with no justification opportunity is start aligned when it would be justified.
+    /// [CSS Text 3 § 6.4.3][css-justify-limits] aligns such a line by `text-align-last` instead,
+    /// and as for `center` if that is `justify`.
+    ///
+    /// [css-text-align-last]: https://www.w3.org/TR/css-text-3/#text-align-last-property
+    /// [css-justify-limits]: https://www.w3.org/TR/css-text-3/#justify-limits
     pub last_line_alignment: Option<Alignment>,
 }
 
