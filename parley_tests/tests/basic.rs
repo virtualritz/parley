@@ -7,8 +7,8 @@ use crate::util::TestEnv;
 use crate::{test_name, util::ColorBrush};
 use parley::{
     Alignment, AlignmentOptions, BreakReason, ContentWidths, FontFamily, FontWeight, InlineBox,
-    InlineBoxKind, Layout, LeadingDistribution, LineHeight, PositionedLayoutItem, StyleProperty,
-    TextStyle, TextWrapMode, VerticalAlign, WhiteSpaceCollapse,
+    InlineBoxKind, Layout, LeadingDistribution, LineHeight, PositionedLayoutItem, RangedBuilder,
+    StyleProperty, TextStyle, TextWrapMode, VerticalAlign, WhiteSpaceCollapse,
 };
 use peniko::color::{AlphaColor, Srgb, palette};
 use peniko::kurbo::Size;
@@ -1229,20 +1229,20 @@ fn shaping_context_across_items() {
     );
 }
 
-/// Line height doesn't affect shaping, so a style change that only changes the line height must
-/// not be a shaping boundary: ligatures must still form, and kerning must still apply, across it.
-#[test]
-fn shaping_line_height_change_is_not_a_shaping_boundary() {
-    let mut env = TestEnv::new(test_name!(), None);
-
+/// Asserts that a style change that doesn't affect shaping is not a shaping boundary: ligatures
+/// still form, and kerning still applies, across it. `change` pushes the change for a byte range.
+fn assert_not_a_shaping_boundary(
+    env: &mut TestEnv,
+    change: impl Fn(&mut RangedBuilder<'_, ColorBrush>, std::ops::Range<usize>),
+) {
     // Roboto forms an "ffi" ligature, and kerns "VA" and "AT".
     let text = "affine VAT";
 
-    let glyphs = |env: &mut TestEnv, line_height_change: Option<usize>| {
+    let mut glyphs = |change_at: Option<usize>| {
         let mut builder = env.ranged_builder(text);
         builder.push_default(LineHeight::Absolute(20.));
-        if let Some(index) = line_height_change {
-            builder.push(LineHeight::Absolute(40.), index..text.len());
+        if let Some(index) = change_at {
+            change(&mut builder, index..text.len());
         }
         let mut layout = builder.build(text);
         layout.break_all_lines(None);
@@ -1264,7 +1264,7 @@ fn shaping_line_height_change_is_not_a_shaping_boundary() {
             .collect::<Vec<_>>()
     };
 
-    let expected = glyphs(&mut env, None);
+    let expected = glyphs(None);
     assert!(
         expected.len() < text.chars().count(),
         "expected \"ffi\" to form a ligature, got {} glyphs for {} characters",
@@ -1274,11 +1274,21 @@ fn shaping_line_height_change_is_not_a_shaping_boundary() {
 
     for (index, _) in text.char_indices().skip(1) {
         assert_eq!(
-            glyphs(&mut env, Some(index)),
+            glyphs(Some(index)),
             expected,
-            "changing the line height at byte {index} must not change the glyphs or their positions"
+            "a style change at byte {index} must not change the glyphs or their positions"
         );
     }
+}
+
+/// Line height doesn't affect shaping, so a style change that only changes the line height must
+/// not be a shaping boundary.
+#[test]
+fn shaping_line_height_change_is_not_a_shaping_boundary() {
+    let mut env = TestEnv::new(test_name!(), None);
+    assert_not_a_shaping_boundary(&mut env, |builder, range| {
+        builder.push(LineHeight::Absolute(40.), range);
+    });
 }
 
 /// Like a line height, a leading distribution doesn't affect shaping, so a style change that
@@ -1286,52 +1296,9 @@ fn shaping_line_height_change_is_not_a_shaping_boundary() {
 #[test]
 fn shaping_leading_distribution_change_is_not_a_shaping_boundary() {
     let mut env = TestEnv::new(test_name!(), None);
-
-    // Roboto forms an "ffi" ligature, and kerns "VA" and "AT".
-    let text = "affine VAT";
-
-    let glyphs = |env: &mut TestEnv, change: Option<usize>| {
-        let mut builder = env.ranged_builder(text);
-        builder.push_default(LineHeight::Absolute(20.));
-        if let Some(index) = change {
-            builder.push(LeadingDistribution::Proportional, index..text.len());
-        }
-        let mut layout = builder.build(text);
-        layout.break_all_lines(None);
-        layout
-            .lines()
-            .flat_map(|line| {
-                line.items()
-                    .filter_map(|item| match item {
-                        PositionedLayoutItem::GlyphRun(run) => Some(
-                            run.positioned_glyphs()
-                                .map(|glyph| (glyph.id, glyph.x))
-                                .collect::<Vec<_>>(),
-                        ),
-                        PositionedLayoutItem::InlineBox(_) => None,
-                    })
-                    .flatten()
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>()
-    };
-
-    let expected = glyphs(&mut env, None);
-    assert!(
-        expected.len() < text.chars().count(),
-        "expected \"ffi\" to form a ligature, got {} glyphs for {} characters",
-        expected.len(),
-        text.chars().count()
-    );
-
-    for (index, _) in text.char_indices().skip(1) {
-        assert_eq!(
-            glyphs(&mut env, Some(index)),
-            expected,
-            "changing the leading distribution at byte {index} must not change the glyphs or \
-             their positions"
-        );
-    }
+    assert_not_a_shaping_boundary(&mut env, |builder, range| {
+        builder.push(LeadingDistribution::Proportional, range);
+    });
 }
 
 #[test]
