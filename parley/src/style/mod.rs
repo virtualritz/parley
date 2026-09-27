@@ -110,7 +110,7 @@ impl LineHeight {
 ///
 /// The leading is the difference between the span's resolved [`LineHeight`] and the ascent plus
 /// descent of its font. The distribution places the span's line-height box around its baseline,
-/// which decides how the span sizes its line.
+/// which decides how the span sizes its line (see [`LineBoxSizing`](crate::LineBoxSizing)).
 ///
 /// With [`HalfLeading`](Self::HalfLeading), a smaller font with a relatively larger line height can
 /// reach further below the baseline than a larger font's box, making the line taller than any of

@@ -4,8 +4,8 @@
 //! Tests for [`LeadingDistribution`].
 
 use parley::{
-    Alignment, AlignmentOptions, FontFamily, LayoutContext, LeadingDistribution, LineHeight,
-    StyleProperty, VerticalAlign,
+    Alignment, AlignmentOptions, FontFamily, LayoutContext, LeadingDistribution, LineBoxSizing,
+    LineHeight, StyleProperty, VerticalAlign,
 };
 
 use crate::test_name;
@@ -316,35 +316,46 @@ fn leading_distribution_proportional_fallback_font() {
     // Roboto, the first available font, has no Arabic, so this is set in Noto Kufi Arabic.
     let text = "عليكم";
     let normal = LineHeight::MetricsRelative(1.5);
-    let proportional = layout(
-        text,
-        Options::new(normal, LeadingDistribution::Proportional),
-        &[],
-        None,
-    );
-    let line = proportional.get(0).unwrap();
-    let fallback = run_fonts(&line)[0];
-    let line_height = 1.5 * (fallback.ascent + fallback.descent + fallback.leading);
-    let (height, baseline) = heights_and_baselines(&proportional)[0];
-    // The fallback font's box is taller than the root's box in Roboto, above and below the
-    // baseline.
-    assert_close(height, line_height, "line height");
-    assert_close(
-        baseline,
-        line_height * fallback.above_fraction(),
-        "baseline",
-    );
+    for sizing in [LineBoxSizing::Union, LineBoxSizing::LargestLineHeight] {
+        let layout = layout(
+            text,
+            Options::new(normal, LeadingDistribution::Proportional).sizing(sizing),
+            &[],
+            None,
+        );
+        let line = layout.get(0).unwrap();
+        let fallback = run_fonts(&line)[0];
+        let line_height = 1.5 * (fallback.ascent + fallback.descent + fallback.leading);
+        let (height, baseline) = heights_and_baselines(&layout)[0];
+        // The fallback font's box is taller than the root's box in Roboto, above and below the
+        // baseline.
+        assert_close(height, line_height, "line height");
+        assert_close(
+            baseline,
+            line_height * fallback.above_fraction(),
+            "baseline",
+        );
 
-    // With half-leading, the same box sits lower.
-    let half_leading = layout(
+        // With half-leading, the same box sits lower.
+        let half_leading = layout_with(text, normal, LeadingDistribution::HalfLeading, sizing);
+        let (_, half_leading_baseline) = heights_and_baselines(&half_leading)[0];
+        let expected = fallback.ascent + (line_height - (fallback.ascent + fallback.descent)) / 2.;
+        assert_close(half_leading_baseline, expected, "half-leading baseline");
+    }
+}
+
+fn layout_with(
+    text: &str,
+    root: LineHeight,
+    distribution: LeadingDistribution,
+    sizing: LineBoxSizing,
+) -> parley::Layout<ColorBrush> {
+    layout(
         text,
-        Options::new(normal, LeadingDistribution::HalfLeading),
+        Options::new(root, distribution).sizing(sizing),
         &[],
         None,
-    );
-    let (_, half_leading_baseline) = heights_and_baselines(&half_leading)[0];
-    let expected = fallback.ascent + (line_height - (fallback.ascent + fallback.descent)) / 2.;
-    assert_close(half_leading_baseline, expected, "half-leading baseline");
+    )
 }
 
 /// Small text with a large line height, large text with a tight one, and a `text-top` span,

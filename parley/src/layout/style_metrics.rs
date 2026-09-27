@@ -207,6 +207,8 @@ pub(crate) struct BoxMetrics {
     pub(crate) over: f32,
     /// Distance from the baseline to the bottom of the line-height expanded box.
     pub(crate) under: f32,
+    /// The resolved line height (`over + under`).
+    pub(crate) line_height: f32,
 }
 
 impl BoxMetrics {
@@ -255,6 +257,7 @@ impl BoxMetrics {
             descent,
             over,
             under: line_height - over,
+            line_height,
         }
     }
 }
