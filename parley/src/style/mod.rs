@@ -106,6 +106,31 @@ impl LineHeight {
     }
 }
 
+/// How the leading of a span is distributed above and below its text.
+///
+/// The leading is the span's resolved [`LineHeight`] minus the ascent and descent of its font.
+///
+/// The distribution also moves spans aligned by [`VerticalAlign::TEXT_TOP`],
+/// [`VerticalAlign::TEXT_BOTTOM`] and [`VerticalAlign::MIDDLE`], which align the span's
+/// line-height box.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum LeadingDistribution {
+    /// Half of the leading above the text and half below it, as in
+    /// [CSS 2.2 § 10.8.1][css-leading].
+    ///
+    /// Flutter's `TextLeadingDistribution.even`.
+    ///
+    /// [css-leading]: https://www.w3.org/TR/CSS22/visudet.html#leading
+    #[default]
+    HalfLeading,
+    /// The line height split in the ratio of the font's ascent to its descent, each with half of
+    /// the font's line gap added.
+    ///
+    /// Flutter's `TextLeadingDistribution.proportional`, and Skia's paragraph default
+    /// (`TextStyle::setHalfLeading(false)`).
+    Proportional,
+}
+
 /// Which reference of a span (or [`InlineBox`]) is aligned with the same reference of its
 /// *parent* span (the enclosing style span, or the root style for top-level content). Mirrors the
 /// CSS `alignment-baseline` property.
@@ -261,6 +286,8 @@ pub enum StyleProperty<'a, B: Brush> {
     StrikethroughBrush(Option<B>),
     /// Line height.
     LineHeight(LineHeight),
+    /// Distribution of the leading around the text.
+    LeadingDistribution(LeadingDistribution),
     /// Vertical alignment within the line.
     VerticalAlign(VerticalAlign),
     /// Extra spacing between words.
@@ -318,6 +345,8 @@ pub struct TextStyle<'family, 'settings, B: Brush> {
     pub strikethrough_brush: Option<B>,
     /// Line height.
     pub line_height: LineHeight,
+    /// Distribution of the leading around the text.
+    pub leading_distribution: LeadingDistribution,
     /// Vertical alignment within the line.
     pub vertical_align: VerticalAlign,
     /// Extra spacing between words.
@@ -357,6 +386,7 @@ impl<B: Brush> Default for TextStyle<'static, 'static, B> {
             strikethrough_size: None,
             strikethrough_brush: None,
             line_height: LineHeight::default(),
+            leading_distribution: LeadingDistribution::default(),
             vertical_align: VerticalAlign::default(),
             word_spacing: 0.0,
             letter_spacing: 0.0,
@@ -408,6 +438,12 @@ impl<B: Brush> From<GenericFamily> for StyleProperty<'_, B> {
 impl<B: Brush> From<LineHeight> for StyleProperty<'_, B> {
     fn from(value: LineHeight) -> Self {
         StyleProperty::LineHeight(value)
+    }
+}
+
+impl<B: Brush> From<LeadingDistribution> for StyleProperty<'_, B> {
+    fn from(value: LeadingDistribution) -> Self {
+        StyleProperty::LeadingDistribution(value)
     }
 }
 

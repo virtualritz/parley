@@ -51,7 +51,8 @@ pub(crate) struct RunData {
 ///
 /// Per [CSS Inline 3 § 4.1], glyphs from fonts other than the first available font only
 /// contribute to the line when the `line-height` is `normal` ([`LineHeight::MetricsRelative`]);
-/// otherwise the style's span box alone sizes the line and this returns `None`.
+/// otherwise the style's span box alone sizes the line and this returns `None`. The leading is
+/// distributed by the style's [`LeadingDistribution`](crate::LeadingDistribution).
 ///
 /// [CSS Inline 3 § 4.1]: https://drafts.csswg.org/css-inline-3/#inline-height
 #[inline]
@@ -64,7 +65,12 @@ pub(crate) fn run_box_metrics<B: Brush>(
         LineHeight::MetricsRelative(_) => {
             let (size, metrics) = (shaped_run.font_size, &shaped_run.font_metrics);
             let line_height = style.line_height.resolve(size, metrics, quantize);
-            Some(BoxMetrics::from_font(metrics, line_height, quantize))
+            Some(BoxMetrics::from_font(
+                metrics,
+                line_height,
+                style.leading_distribution,
+                quantize,
+            ))
         }
         LineHeight::FontSizeRelative(_) | LineHeight::Absolute(_) => None,
     }
@@ -329,17 +335,22 @@ impl<B: Brush> LayoutData<B> {
         );
 
         // The run's box metrics, if it's uniform across all the styles within the run. A run's box
-        // can change mid-run if the line height changes.
+        // can change mid-run if the line height or the leading distribution changes.
         let run_box = {
             let chars = shaped_run.range.char_range.clone();
             let first_style = char_styles[chars.start];
-            let line_height = self.styles[usize::from(first_style)].line_height;
+            let first = &self.styles[usize::from(first_style)];
+            let (line_height, leading_distribution) =
+                (first.line_height, first.leading_distribution);
 
-            let uniform_line_height = char_styles[chars].iter().all(|&s| {
-                s == first_style || self.styles[usize::from(s)].line_height == line_height
+            let uniform = char_styles[chars].iter().all(|&s| {
+                let style = &self.styles[usize::from(s)];
+                s == first_style
+                    || (style.line_height == line_height
+                        && style.leading_distribution == leading_distribution)
             });
 
-            if uniform_line_height {
+            if uniform {
                 run_box_metrics(
                     &self.styles[usize::from(first_style)],
                     shaped_run,
