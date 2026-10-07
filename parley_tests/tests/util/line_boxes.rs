@@ -1,15 +1,15 @@
 // Copyright 2026 the Parley Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Helpers for tests of [`LeadingDistribution`], which lay out text without quantization and
-//! compare line metrics against font metrics.
+//! Helpers for tests of [`LeadingDistribution`] and [`LineBoxSizing`], which lay out text
+//! without quantization and compare line metrics against font metrics.
 
 use std::borrow::Cow;
 use std::ops::Range;
 
 use parley::{
     FontFamily, FontFamilyName, InlineBox, Layout, LayoutContext, LeadingDistribution, Line,
-    LineHeight, PositionedLayoutItem, StyleProperty, VerticalAlign,
+    LineBoxSizing, LineHeight, PositionedLayoutItem, StyleProperty, VerticalAlign,
 };
 
 use super::ColorBrush;
@@ -60,23 +60,36 @@ impl Span {
 pub(crate) struct Options {
     pub(crate) root: LineHeight,
     pub(crate) distribution: LeadingDistribution,
+    pub(crate) sizing: LineBoxSizing,
     pub(crate) quantize: bool,
     pub(crate) max_advance: Option<f32>,
 }
 
 impl Options {
-    /// A root line height of `root`, `distribution`, no quantization and no wrapping.
+    /// A root line height of `root`, `distribution`, [`LineBoxSizing::Union`], no quantization
+    /// and no wrapping.
     pub(crate) fn new(root: LineHeight, distribution: LeadingDistribution) -> Self {
         Self {
             root,
             distribution,
+            sizing: LineBoxSizing::Union,
             quantize: false,
             max_advance: None,
         }
     }
 
+    pub(crate) fn sizing(mut self, sizing: LineBoxSizing) -> Self {
+        self.sizing = sizing;
+        self
+    }
+
     pub(crate) fn quantize(mut self, quantize: bool) -> Self {
         self.quantize = quantize;
+        self
+    }
+
+    pub(crate) fn max_advance(mut self, max_advance: Option<f32>) -> Self {
+        self.max_advance = max_advance;
         self
     }
 }
@@ -110,6 +123,7 @@ pub(crate) fn layout(
         builder.push_inline_box(inline_box);
     }
     let mut layout = builder.build(text);
+    layout.set_line_box_sizing(options.sizing);
     layout.break_all_lines(options.max_advance);
     layout
 }

@@ -8,7 +8,9 @@ use crate::layout::whitespace::whitespace_hangs;
 use crate::layout::{ContentWidths, LineMetrics, Style};
 use crate::resolve::ResolvedStyle;
 use crate::style::Brush;
-use crate::{IndentOptions, LineHeight, OverflowWrap, TextWrapMode, WhiteSpaceCollapse};
+use crate::{
+    IndentOptions, LineBoxSizing, LineHeight, OverflowWrap, TextWrapMode, WhiteSpaceCollapse,
+};
 use core::ops::Range;
 
 use alloc::vec::Vec;
@@ -221,6 +223,8 @@ pub(crate) struct LayoutData<B: Brush> {
     pub(crate) indent_amount: f32,
     /// Options controlling text-indent behavior.
     pub(crate) indent_options: IndentOptions,
+    /// How the boxes on a line size the line box.
+    pub(crate) line_box_sizing: LineBoxSizing,
 
     // Output of line breaking
     /// The lines in the
@@ -271,6 +275,7 @@ impl<B: Brush> Default for LayoutData<B> {
             layout_max_advance: 0.0,
             indent_amount: 0.0,
             indent_options: IndentOptions::default(),
+            line_box_sizing: LineBoxSizing::default(),
         }
     }
 }
@@ -287,6 +292,7 @@ impl<B: Brush> LayoutData<B> {
         self.layout_max_advance = 0.0;
         self.indent_amount = 0.0;
         self.indent_options = IndentOptions::default();
+        self.line_box_sizing = LineBoxSizing::default();
         self.styles.clear();
         self.style_metrics.clear();
         self.inline_boxes.clear();
