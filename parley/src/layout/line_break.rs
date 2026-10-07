@@ -17,10 +17,11 @@ use crate::layout::style_metrics::{
 };
 use crate::layout::whitespace::atom_hanging_advance;
 use crate::layout::{
-    BreakReason, Layout, LayoutData, LayoutItem, LayoutItemKind, LineData, LineItemData,
-    LineMetrics, Run,
+    BreakReason, Layout, LayoutData, LayoutItem, LayoutItemKind, LineBoxSizing, LineData,
+    LineItemData, LineMetrics, Run,
 };
 use crate::style::Brush;
+use crate::util::nearly_eq;
 use crate::{
     BaselineShift, InlineBox, InlineBoxKind, OverflowWrap, TextWrapMode, VerticalAlign,
     WhiteSpaceCollapse,
@@ -86,10 +87,11 @@ struct LineState {
 }
 
 impl LineState {
-    /// Reset the per-line running state in preparation for building a new line.
-    fn reset(&mut self) {
+    /// Reset the per-line running state in preparation for building a new line sized by
+    /// `sizing`.
+    fn reset(&mut self, sizing: LineBoxSizing) {
         self.x = 0.0;
-        self.box_metrics.reset();
+        self.box_metrics.reset(sizing);
         self.num_word_separators = 0;
     }
 }
@@ -128,6 +130,8 @@ struct LineBoxMetrics {
     has_content: bool,
     /// The layout item and style of the last text atom added, whose boxes are already on the line.
     last_text: (usize, u16),
+    /// How the boxes on the line size it.
+    sizing: LineBoxSizing,
 }
 
 /// Extents of one [independent aligned subtree] on the current line, measured from the subtree's
@@ -203,6 +207,74 @@ impl Extents {
     }
 }
 
+/// The line-height box with the largest line height in an aligned subtree, measured from the
+/// subtree's baseline.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TallestBox {
+    line_height: f32,
+    over: f32,
+    under: f32,
+}
+
+impl TallestBox {
+    const NONE: Self = Self {
+        line_height: f32::NEG_INFINITY,
+        over: f32::NEG_INFINITY,
+        under: f32::NEG_INFINITY,
+    };
+
+    /// Replace the box with `metrics`, whose baseline is `baseline_offset` above the subtree's
+    /// baseline, if its line height is larger. Of boxes with the same line height, the one
+    /// reaching furthest above the baseline is kept.
+    #[inline]
+    fn add(&mut self, baseline_offset: f32, metrics: BoxMetrics) {
+        let over = baseline_offset + metrics.over;
+        let replace = if nearly_eq(metrics.line_height, self.line_height) {
+            over > self.over
+        } else {
+            metrics.line_height > self.line_height
+        };
+        if replace {
+            *self = Self {
+                line_height: metrics.line_height,
+                over,
+                under: metrics.under - baseline_offset,
+            };
+        }
+    }
+}
+
+/// What sizes an aligned subtree under [`LineBoxSizing::LargestLineHeight`]: the box of a span
+/// or of a run's glyphs with the largest line height, and the inline boxes. The subtree's line
+/// box is their union.
+///
+/// The tallest box can be replaced by one placed differently, so the inline boxes are kept apart
+/// to compute the line box again.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LargestBoxes {
+    /// Style index of the subtree root.
+    root: u16,
+    tallest: TallestBox,
+    inline_boxes: Extents,
+}
+
+impl LargestBoxes {
+    fn new(root: u16) -> Self {
+        Self {
+            root,
+            tallest: TallestBox::NONE,
+            inline_boxes: Extents::default(),
+        }
+    }
+
+    /// The line box of the subtree.
+    fn line_box(&self) -> Extents {
+        let mut line_box = self.inline_boxes;
+        line_box.add(0., self.tallest.over, self.tallest.under);
+        line_box
+    }
+}
+
 impl SubtreeExtents {
     fn new(root: u16) -> Self {
         Self {
@@ -235,10 +307,13 @@ impl SubtreeExtents {
 /// - [restoring](Self::restore) a save drops every entry pushed since, leaving the frozen
 ///   entries as they were at that save.
 ///
+/// Under [`LineBoxSizing::LargestLineHeight`], the history also holds the [`LargestBoxes`] of
+/// every aligned subtree with content, the root aligned subtree included.
+///
 /// [independent aligned subtree]: crate::layout::style_metrics#aligned-subtrees
 #[derive(Default)]
 struct SubtreeHistory {
-    entries: Vec<SubtreeExtents>,
+    entries: Vec<HistoryEntry>,
     /// The first `frozen_count` entries may be needed by a save, so are never modified.
     frozen_count: usize,
 }
@@ -257,32 +332,98 @@ impl Clone for SubtreeHistory {
     }
 }
 
+/// An entry of [`SubtreeHistory`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum HistoryEntry {
+    Subtree(SubtreeExtents),
+    Largest(LargestBoxes),
+}
+
 impl SubtreeHistory {
     /// The current extents of every subtree with content on the line, in no particular order.
     fn current(&self) -> SmallVec<[SubtreeExtents; 4]> {
         let mut current = SmallVec::<[SubtreeExtents; 4]>::new();
         for entry in self.entries.iter().rev() {
-            if current.iter().rev().all(|s| s.root != entry.root) {
+            if let HistoryEntry::Subtree(entry) = entry
+                && current.iter().rev().all(|s| s.root != entry.root)
+            {
                 current.push(*entry);
             }
         }
         current
     }
 
+    /// Store `new` as the current value of the entry at `index`, if any.
+    fn store(&mut self, index: Option<usize>, new: HistoryEntry) {
+        match index {
+            Some(i) if i >= self.frozen_count => self.entries[i] = new,
+            _ => self.entries.push(new),
+        }
+    }
+
+    /// Update the extents of the subtree rooted at `root` with `update`. Returns the extents
+    /// before, if the subtree had any, and after.
+    fn update(
+        &mut self,
+        root: u16,
+        update: impl FnOnce(&mut SubtreeExtents),
+    ) -> (Option<SubtreeExtents>, SubtreeExtents) {
+        let found = self
+            .entries
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(i, entry)| match entry {
+                HistoryEntry::Subtree(s) if s.root == root => Some((i, *s)),
+                _ => None,
+            });
+        let old = found.map(|(_, s)| s);
+        let mut new = old.unwrap_or(SubtreeExtents::new(root));
+        update(&mut new);
+        if old != Some(new) {
+            self.store(found.map(|(i, _)| i), HistoryEntry::Subtree(new));
+        }
+        (old, new)
+    }
+
     /// Grow the subtree rooted at `root` to include a box whose baseline is `baseline_offset`
     /// above the subtree's baseline. Returns the subtree's new extents.
     fn grow(&mut self, root: u16, baseline_offset: f32, metrics: BoxMetrics) -> SubtreeExtents {
-        let index = self.entries.iter().rposition(|s| s.root == root);
-        let old = index.map(|i| self.entries[i]);
-        let mut new = old.unwrap_or(SubtreeExtents::new(root));
-        new.add(baseline_offset, metrics);
+        self.update(root, |s| s.add(baseline_offset, metrics)).1
+    }
+
+    /// Update the [`LargestBoxes`] of the subtree rooted at `root` with `update`, and return them.
+    fn update_largest(
+        &mut self,
+        root: u16,
+        update: impl FnOnce(&mut LargestBoxes),
+    ) -> LargestBoxes {
+        let found = self
+            .entries
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(i, entry)| match entry {
+                HistoryEntry::Largest(l) if l.root == root => Some((i, *l)),
+                _ => None,
+            });
+        let old = found.map(|(_, l)| l);
+        let mut new = old.unwrap_or(LargestBoxes::new(root));
+        update(&mut new);
         if old != Some(new) {
-            match index {
-                Some(i) if i >= self.frozen_count => self.entries[i] = new,
-                _ => self.entries.push(new),
-            }
+            self.store(found.map(|(i, _)| i), HistoryEntry::Largest(new));
         }
         new
+    }
+
+    /// The line box height of the tallest subtree.
+    #[cold]
+    #[inline(never)]
+    fn max_height(&self) -> f32 {
+        self.current()
+            .iter()
+            .map(|subtree| subtree.line_box.height())
+            .fold(0., f32::max)
     }
 
     /// Save the current extents of every subtree, returning the length of the history to pass
@@ -315,14 +456,18 @@ impl Default for LineBoxMetrics {
             line_relative_bottom_height: 0.,
             has_content: false,
             last_text: (usize::MAX, 0),
+            sizing: LineBoxSizing::Union,
         }
     }
 }
 
 impl LineBoxMetrics {
-    /// Reset to an empty line.
-    fn reset(&mut self) {
-        *self = Self::default();
+    /// Reset to an empty line sized by `sizing`.
+    fn reset(&mut self, sizing: LineBoxSizing) {
+        *self = Self {
+            sizing,
+            ..Self::default()
+        };
     }
 
     /// Add a box whose baseline is `baseline_offset` above the baseline of the aligned subtree
@@ -340,6 +485,64 @@ impl LineBoxMetrics {
         } else {
             let subtree = subtrees.grow(aligned_subtree_root, baseline_offset, metrics);
             self.non_root_height = self.non_root_height.max(subtree.line_box.height());
+        }
+    }
+
+    /// Add the box of a span, or of a run's glyphs, whose baseline is `baseline_offset` above the
+    /// baseline of the aligned subtree rooted at `aligned_subtree_root`.
+    ///
+    /// Under [`LineBoxSizing::Union`], this is [`Self::add_box`].
+    #[inline]
+    fn add_text_box(
+        &mut self,
+        aligned_subtree_root: u16,
+        baseline_offset: f32,
+        metrics: BoxMetrics,
+        subtrees: &mut SubtreeHistory,
+    ) {
+        match self.sizing {
+            LineBoxSizing::Union => {
+                self.add_box(aligned_subtree_root, baseline_offset, metrics, subtrees);
+            }
+            LineBoxSizing::LargestLineHeight => {
+                self.add_largest_text_box(aligned_subtree_root, baseline_offset, metrics, subtrees);
+            }
+        }
+    }
+
+    /// [`Self::add_text_box`] under [`LineBoxSizing::LargestLineHeight`]: the box grows the
+    /// content box, but only competes for the subtree's [tallest box](LargestBoxes::tallest).
+    #[inline(never)]
+    fn add_largest_text_box(
+        &mut self,
+        aligned_subtree_root: u16,
+        baseline_offset: f32,
+        metrics: BoxMetrics,
+        subtrees: &mut SubtreeHistory,
+    ) {
+        let line_box = subtrees
+            .update_largest(aligned_subtree_root, |largest| {
+                largest.tallest.add(baseline_offset, metrics);
+            })
+            .line_box();
+        let add = |subtree: &mut SubtreeExtents| {
+            subtree
+                .content_box
+                .add(baseline_offset, metrics.ascent, metrics.descent);
+            subtree.line_box = line_box;
+        };
+        if aligned_subtree_root == 0 {
+            add(&mut self.root);
+        } else {
+            let (old, new) = subtrees.update(aligned_subtree_root, add);
+            let height = new.line_box.height();
+            self.non_root_height = if height < old.map_or(0., |old| old.line_box.height()) {
+                // A box with a larger line height can replace the tallest box, and make the
+                // subtree shorter.
+                subtrees.max_height()
+            } else {
+                self.non_root_height.max(height)
+            };
         }
     }
 
@@ -374,8 +577,9 @@ impl LineBoxMetrics {
                 descent: metrics.descent,
                 over: metrics.over,
                 under: metrics.under,
+                line_height: metrics.line_height,
             };
-            self.add_box(
+            self.add_text_box(
                 metrics.aligned_subtree_root,
                 metrics.baseline_offset,
                 span_box,
@@ -471,7 +675,7 @@ impl LineBoxMetrics {
             .style_metrics
             .get(style)
             .map_or((0., 0), |m| (m.baseline_offset, m.aligned_subtree_root));
-        self.add_box(aligned_subtree_root, baseline_offset, run_box, subtrees);
+        self.add_text_box(aligned_subtree_root, baseline_offset, run_box, subtrees);
     }
 
     /// Add an inline box extending `ascent` above and `descent` below a baseline that is
@@ -497,7 +701,13 @@ impl LineBoxMetrics {
             descent,
             over: ascent,
             under: descent,
+            line_height: ascent + descent,
         };
+        if self.sizing == LineBoxSizing::LargestLineHeight {
+            subtrees.update_largest(aligned_subtree_root, |largest| {
+                largest.inline_boxes.add(baseline_offset, ascent, descent);
+            });
+        }
         self.add_box(aligned_subtree_root, baseline_offset, inline_box, subtrees);
     }
 
@@ -923,7 +1133,7 @@ impl<'a, B: Brush> BreakLines<'a, B> {
     /// The line starts out containing the root span box (the "strut", CSS 2 §10.8).
     fn reset_line(&mut self) {
         let state = &mut self.state;
-        state.line.reset();
+        state.line.reset(self.layout.data.line_box_sizing);
         state.contributed.clear();
         state.subtrees.clear();
         state.line.box_metrics.add_style(
@@ -2080,7 +2290,7 @@ fn reorder_line_items(runs: &mut [LineItemData]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{BoxMetrics, BreakerState};
+    use super::{BoxMetrics, BreakerState, LineBoxSizing};
 
     #[test]
     fn subtree_extents_restored_at_break_opportunities() {
@@ -2089,6 +2299,7 @@ mod tests {
             descent: 2.,
             over: 6.,
             under: 2.,
+            line_height: 8.,
         };
         for emergency in [false, true] {
             let mut state = BreakerState::default();
@@ -2122,5 +2333,26 @@ mod tests {
             assert_eq!(subtree_height(&state), expected);
             assert_eq!(state.subtrees.current().len(), 1);
         }
+    }
+    /// Under `LargestLineHeight`, a box with a larger line height replaces the tallest box of a
+    /// `top`/`bottom` subtree, which makes the subtree shorter when an inline box extends it the
+    /// other way.
+    #[test]
+    fn largest_line_height_subtree_can_shrink() {
+        let span = |line_height: f32, over: f32| BoxMetrics {
+            ascent: over,
+            descent: line_height - over,
+            over,
+            under: line_height - over,
+            line_height,
+        };
+        let mut state = BreakerState::default();
+        let metrics = &mut state.line.box_metrics;
+        metrics.reset(LineBoxSizing::LargestLineHeight);
+        metrics.add_inline_box(1, 0., 0., 20., &mut state.subtrees);
+        metrics.add_text_box(1, 0., span(20., 20.), &mut state.subtrees);
+        assert_eq!(metrics.line_height(), 40.);
+        metrics.add_text_box(1, 0., span(21., 10.5), &mut state.subtrees);
+        assert_eq!(metrics.line_height(), 30.5);
     }
 }

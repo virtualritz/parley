@@ -3,6 +3,7 @@
 
 use crate::IndentOptions;
 use crate::InlineBox;
+use crate::LineBoxSizing;
 use crate::layout::alignment::align;
 use crate::layout::data::LayoutData;
 use crate::layout::{
@@ -199,6 +200,14 @@ impl<B: Brush> Layout<B> {
     pub fn set_text_indent(&mut self, amount: f32, options: IndentOptions) {
         self.data.indent_amount = amount;
         self.data.indent_options = options;
+    }
+
+    /// Sets how the boxes on a line size the line box. The default is [`LineBoxSizing::Union`].
+    ///
+    /// This must be called before [`Layout::break_all_lines`] or [`Layout::break_lines`].
+    /// Building the layout again resets it.
+    pub fn set_line_box_sizing(&mut self, sizing: LineBoxSizing) {
+        self.data.line_box_sizing = sizing;
     }
 
     /// Returns line breaker to compute lines for the layout.

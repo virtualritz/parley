@@ -114,6 +114,32 @@ pub struct IndentOptions {
     pub hanging: bool,
 }
 
+/// How the line-height boxes on a line size the line box.
+///
+/// Every span on a line generates a box of its resolved [`LineHeight`], placed around its baseline
+/// by its [`LeadingDistribution`]. So do the glyphs of a span with a `normal` line height
+/// ([`LineHeight::MetricsRelative`]), in the font they were shaped with, which may be a fallback
+/// font.
+#[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
+pub enum LineBoxSizing {
+    /// The union of the boxes aligned on their baselines, as in
+    /// [CSS 2.2 § 10.8.1][css-leading].
+    ///
+    /// [css-leading]: https://www.w3.org/TR/CSS22/visudet.html#leading
+    #[default]
+    Union,
+    /// The box with the largest line height, so that the line is as tall as the largest line
+    /// height on it. Of boxes with the same line height, the one reaching furthest above the
+    /// baseline is used.
+    ///
+    /// Glyphs of the other boxes may reach outside the line box. They still count towards
+    /// [`LineMetrics::content_block_min_coord`] and [`LineMetrics::content_block_max_coord`].
+    /// [`InlineBox`](crate::InlineBox)es still grow the line box. Each aligned subtree of
+    /// `vertical-align: top | bottom` is sized by its own largest line height, then placed as
+    /// with [`Union`](Self::Union).
+    LargestLineHeight,
+}
+
 /// The inherent metrics of a span.
 ///
 /// These metrics are based only on the [first available font](fontique::Query::first_available_font), and don't
