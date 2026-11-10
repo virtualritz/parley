@@ -239,6 +239,7 @@ fn span_baseline_offset(distribution: LeadingDistribution, align: VerticalAlign)
     let over = match distribution {
         LeadingDistribution::HalfLeading => span.ascent + (40. - (span.ascent + span.descent)) / 2.,
         LeadingDistribution::Proportional => 40. * span.above_fraction(),
+        LeadingDistribution::BaselineAtBottom => 40.,
     };
     (baselines[1] - line.metrics().baseline, over)
 }
@@ -383,6 +384,70 @@ fn leading_distribution_mixed_sizes() {
         layout.break_all_lines(Some(200.));
         env.with_name(name).check_layout_snapshot(&layout);
     }
+}
+
+/// With the baseline at the bottom of the line box, fonts with clearly different ascent to
+/// descent ratios still put the whole line height above the baseline.
+#[test]
+fn leading_distribution_baseline_at_bottom_line_is_the_line_height_above_the_baseline() {
+    // Roboto puts 1900/2400 of a line height above the baseline, Noto Kufi Arabic 1282/1897.
+    let text = "abc مرحبا";
+    let layout = layout(
+        text,
+        Options::new(
+            LineHeight::Absolute(0.),
+            LeadingDistribution::BaselineAtBottom,
+        ),
+        &[
+            Span::new(0..4, "Roboto", 20., 40.),
+            Span::new(4..text.len(), "Noto Kufi Arabic", 20., 40.),
+        ],
+        None,
+    );
+    let line = layout.get(0).unwrap();
+    let fractions: Vec<f32> = run_fonts(&line)
+        .iter()
+        .map(FontExtents::above_fraction)
+        .collect();
+    let highest = fractions.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let lowest = fractions.iter().copied().fold(f32::INFINITY, f32::min);
+    assert!(highest - lowest > 0.1, "{fractions:?}");
+
+    let (height, baseline) = heights_and_baselines(&layout)[0];
+    assert_close(height, 40., "line height");
+    assert_close(baseline, 40., "baseline");
+    assert_close(height - baseline, 0., "under");
+    assert_glyphs_on_the_baseline(&line);
+}
+
+/// Each baseline sits at the bottom of its line box, so baselines are one line height apart and
+/// the block height is the sum of the line heights.
+#[test]
+fn leading_distribution_baseline_at_bottom_stacks_lines_by_their_line_heights() {
+    let text = "first\nsecond";
+    let layout = layout(
+        text,
+        Options::new(
+            LineHeight::Absolute(0.),
+            LeadingDistribution::BaselineAtBottom,
+        ),
+        &[
+            Span::new(0..5, "Roboto", 20., 60.),
+            Span::new(6..text.len(), "Roboto", 20., 100.),
+        ],
+        None,
+    );
+    assert_eq!(layout.len(), 2);
+    let baselines: Vec<f32> = layout.lines().map(|line| line.metrics().baseline).collect();
+    assert_close(baselines[1] - baselines[0], 100., "baseline distance");
+    assert_close(layout.height(), 160., "block height");
+    let heights: Vec<f32> = heights_and_baselines(&layout)
+        .into_iter()
+        .map(|(height, _)| height)
+        .collect();
+    assert_eq!(heights.len(), 2);
+    assert_close(heights[0], 60., "first line height");
+    assert_close(heights[1], 100., "second line height");
 }
 
 /// A leading distribution change doesn't affect shaping: ligatures and kerning work across it.

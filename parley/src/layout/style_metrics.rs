@@ -261,6 +261,7 @@ impl BoxMetrics {
                     half_leading
                 }
             }
+            LeadingDistribution::BaselineAtBottom => line_height - ascent,
         };
         let over = if quantize {
             ascent + leading_above.floor()
