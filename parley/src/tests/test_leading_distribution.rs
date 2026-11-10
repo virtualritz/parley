@@ -72,3 +72,27 @@ fn proportional_box_without_extents() {
     let proportional = BoxMetrics::from_font(&font, 10., LeadingDistribution::Proportional, false);
     assert_eq!((proportional.over, proportional.under), (5., 5.));
 }
+
+/// With the baseline at the bottom, the whole line height is above the baseline whatever the
+/// font's ascent to descent ratio.
+#[test]
+fn baseline_at_bottom_box_reaches_the_line_height_above_the_baseline() {
+    for font in [
+        font_metrics(15., 5., 0.),
+        font_metrics(10., 8., 2.),
+        font_metrics(0., 0., 0.),
+    ] {
+        let metrics =
+            BoxMetrics::from_font(&font, 30., LeadingDistribution::BaselineAtBottom, false);
+        assert_eq!((metrics.over, metrics.under), (30., 0.));
+        assert_eq!(
+            (metrics.ascent, metrics.descent),
+            (font.ascent, font.descent)
+        );
+    }
+
+    // A tight line height still sits entirely above the baseline.
+    let font = font_metrics(15., 5., 0.);
+    let tight = BoxMetrics::from_font(&font, 10., LeadingDistribution::BaselineAtBottom, false);
+    assert_eq!((tight.over, tight.under), (10., 0.));
+}

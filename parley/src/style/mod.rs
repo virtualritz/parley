@@ -129,6 +129,14 @@ pub enum LeadingDistribution {
     /// Flutter's `TextLeadingDistribution.proportional`, and Skia's paragraph default
     /// (`TextStyle::setHalfLeading(false)`).
     Proportional,
+    /// The baseline is the bottom edge of the line box: the whole line height sits above the
+    /// baseline and none below it, as in InDesign. The distance from one baseline to the next is
+    /// therefore exactly the later line's line height, and the font's ascent to descent ratio
+    /// plays no part. Glyphs that reach past their font's ascent, for example in a taller font,
+    /// extend outside the line box.
+    ///
+    /// This has no CSS or Flutter equivalent.
+    BaselineAtBottom,
 }
 
 /// Which reference of a span (or [`InlineBox`]) is aligned with the same reference of its

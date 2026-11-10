@@ -362,6 +362,7 @@ fn line_box_sizing_largest_line_height_quantized() {
             LeadingDistribution::Proportional => {
                 25. * arimo.above_fraction() - arimo.ascent.round()
             }
+            LeadingDistribution::BaselineAtBottom => 25. - arimo.ascent.round(),
         };
         assert_eq!(
             baseline,
